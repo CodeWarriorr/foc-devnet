@@ -152,6 +152,7 @@ def run_node_script(
     args: list[str] | None = None,
     env: dict | None = None,
     timeout: int | None = None,
+    retry_state_forks: bool = True,
 ) -> None:
     """Run a prepared scenario entrypoint with retries for transient state forks."""
     script = runtime.work_dir / script_name
@@ -161,7 +162,7 @@ def run_node_script(
     cmd = ["node", str(script), *(args or [])]
     process_env = {**os.environ, **(env or {})}
 
-    max_attempts = len(UPLOAD_RETRY_DELAYS_SECS) + 1
+    max_attempts = len(UPLOAD_RETRY_DELAYS_SECS) + 1 if retry_state_forks else 1
     for attempt in range(1, max_attempts + 1):
         result = subprocess.run(
             cmd,
@@ -181,6 +182,7 @@ def run_node_script(
             return
         if STATE_FORK_ERROR not in details or attempt == max_attempts:
             fail(f"{label} (exit={result.returncode}) {details}")
+            return
 
         delay = UPLOAD_RETRY_DELAYS_SECS[attempt - 1]
         info(
