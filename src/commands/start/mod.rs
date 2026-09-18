@@ -49,8 +49,8 @@ use tracing::{error, info, warn};
 /// This is required for SP-to-SP fetch to work. The hostname must resolve to localhost
 /// so that URLs registered in the SP registry work from both the host and inside containers.
 ///
-/// On macOS with Docker Desktop, this works automatically.
-/// On Linux, users must add `127.0.0.1 host.docker.internal` to /etc/hosts.
+/// On macOS and Linux, add `127.0.0.1 host.docker.internal` to /etc/hosts
+/// if absent. Docker Desktop container DNS does not ensure host-side resolution.
 fn check_host_docker_internal() -> Result<(), Box<dyn std::error::Error>> {
     info!("Checking host.docker.internal resolution...");
 
