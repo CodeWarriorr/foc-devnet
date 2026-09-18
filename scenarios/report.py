@@ -12,7 +12,11 @@ from string import Template
 from scenarios.dependencies import format_markdown_table
 
 REPORT_MD = os.environ.get(
-    "REPORT_FILE", os.path.expanduser("~/.foc-devnet/state/latest/scenario_report.md")
+    "REPORT_FILE",
+    os.path.join(
+        os.environ.get("FOC_DEVNET_BASEDIR", os.path.expanduser("~/.foc-devnet")),
+        "state/latest/scenario_report.md",
+    ),
 )
 
 

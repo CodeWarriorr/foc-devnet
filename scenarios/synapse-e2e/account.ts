@@ -6,6 +6,7 @@ import type { StorageContext } from '@filoz/synapse-sdk/storage'
 import { type Hash, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import type { ScenarioEnvironment } from './environment.ts'
+import { assertReceiptSucceeded } from './lifecycle-assertions.ts'
 
 export type ScenarioSynapse = Synapse
 export type AccountState = accounts.OutputType
@@ -45,7 +46,10 @@ async function waitForTransaction(synapse: ScenarioSynapse, hash: Hash, label: s
         method: 'eth_getTransactionReceipt',
         params: [hash],
       })
-      if (receipt != null) return
+      if (receipt != null) {
+        assertReceiptSucceeded(receipt, label)
+        return
+      }
     } catch (error) {
       lastError = error
     }
