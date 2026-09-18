@@ -140,9 +140,23 @@ def run_side(args, side, report, common, output):
                 rc = command([binary, "stop"], env, directory / "stop.log", 180)
                 if rc:
                     record.update(status="FAIL", cleanup_error=f"stop exited {rc}")
+                elif run_id:
+                    remove_owned_portainer(run_id)
             except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
                 record.update(status="FAIL", cleanup_error=str(error))
         write_summary(output, report)
+
+
+def remove_owned_portainer(run_id):
+    # The normal stop command intentionally retains Portainer. A comparison must
+    # release its own instance before the next side checks for an idle daemon.
+    container_ids = subprocess.check_output(
+        ["docker", "ps", "-aq", "--filter", f"name=^foc-{run_id}-portainer$"], text=True
+    ).split()
+    if container_ids:
+        subprocess.run(
+            ["docker", "rm", "-f", *container_ids], check=True, capture_output=True
+        )
 
 
 def revision(repository, ref):

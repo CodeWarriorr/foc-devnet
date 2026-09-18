@@ -1353,7 +1353,8 @@ fails this check. Runtime hashes and selector destinations are recorded in
 `candidate/dispatch.json`.
 
 The command initializes and builds two isolated environments serially, starts
-each, runs the regression suite, and stops it. It does not delete run data. It
+each, runs the regression suite, and stops it, including its own Portainer
+container. It does not delete run data. It
 refuses existing foc-devnet containers/networks because the existing `start` and
 `stop` commands sweep those resources across base directories. Do not launch
 another foc-devnet while a comparison is running. The check repeats before each

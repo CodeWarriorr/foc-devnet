@@ -1,5 +1,39 @@
 import assert from 'node:assert/strict'
 
+const STATE_FORK_MESSAGE =
+  'required historical state unavailable: refusing explicit call due to state fork at epoch '
+
+export function classifyProofPollError(error: unknown): { retry: true; epoch: number } {
+  const seen = new Set<unknown>()
+  let current = error
+  while (current != null && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current)
+    const record = current as {
+      cause?: unknown
+      code?: unknown
+      data?: unknown
+      details?: unknown
+      message?: unknown
+      shortMessage?: unknown
+    }
+    const epoch = record.data
+    const messages = [record.message, record.details, record.shortMessage]
+    if (
+      record.code === -32002 &&
+      typeof epoch === 'number' &&
+      Number.isSafeInteger(epoch) &&
+      epoch >= 0 &&
+      messages.some(
+        (message) => typeof message === 'string' && message.includes(`${STATE_FORK_MESSAGE}${epoch}`)
+      )
+    ) {
+      return { retry: true, epoch }
+    }
+    current = record.cause
+  }
+  throw error
+}
+
 export type SettlementAmounts = {
   gross: bigint
   networkFee: bigint
