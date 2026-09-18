@@ -6,6 +6,8 @@ Run one test:   python3 scenarios/test_containers.py
 """
 
 import os
+import argparse
+import signal
 import subprocess
 import sys
 import time
@@ -35,6 +37,12 @@ ORDER = [
     ("test_caching_subsystem", 200),
 ]
 
+FWSS_REGRESSION_ORDER = [
+    ("test_containers", 5),
+    ("test_basic_balances", 10),
+    ("test_fwss_lifecycle", 1800),
+]
+
 
 def _run_single_test(scenario_py_file, name, timeout_sec):
     """Run one scenario file as a subprocess, return a TestResult."""
@@ -45,17 +53,18 @@ def _run_single_test(scenario_py_file, name, timeout_sec):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        start_new_session=True,
     )
     timed_out = False
     try:
         stdout, _ = process.communicate(timeout=timeout_sec)
         return_code = process.returncode
     except subprocess.TimeoutExpired:
-        process.kill()
+        os.killpg(process.pid, signal.SIGKILL)
         stdout, _ = process.communicate()
         timed_out, return_code = True, -1
     except Exception as e:
-        process.kill()
+        os.killpg(process.pid, signal.SIGKILL)
         process.wait()
         stdout, return_code = f"[ERROR] Exception during test execution: {e}", -1
 
@@ -75,12 +84,12 @@ def _run_single_test(scenario_py_file, name, timeout_sec):
     )
 
 
-def run_tests():
+def run_tests(order=None):
     """Run scenarios in ORDER. Returns list of TestResult."""
     pwd = os.path.dirname(os.path.abspath(__file__))
     return [
         _run_single_test(os.path.join(pwd, f"{name}.py"), name, timeout)
-        for name, timeout in ORDER
+        for name, timeout in (ORDER if order is None else order)
     ]
 
 
@@ -116,8 +125,17 @@ def _print_ci_url():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--fwss-regression", action="store_true")
+    parser.add_argument("--require-dispatch", action="store_true")
+    args = parser.parse_args()
+    if args.require_dispatch and not args.fwss_regression:
+        parser.error("--require-dispatch requires --fwss-regression")
+    order = list(FWSS_REGRESSION_ORDER if args.fwss_regression else ORDER)
+    if args.require_dispatch:
+        order.insert(0, ("test_fwss_dispatch", 180))
     start = time.time()
-    results = run_tests()
+    results = run_tests(order)
     elapsed = int(time.time() - start)
     _print_summary(results, elapsed)
     print(f"Report: {write_report(results=results)}")

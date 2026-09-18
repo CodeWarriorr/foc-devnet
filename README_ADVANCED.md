@@ -1309,6 +1309,83 @@ docker run --rm --network host \
 
 ## Scenario Tests
 
+### FWSS refactor regression
+
+The opt-in regression suite exercises upload/retrieval, real PDP proof progress,
+settlement of a completed proven period, repeat settlement, unauthorized
+administration, and payer termination. It uses the same business assertions for
+both revisions. A baseline failure is a failed run, not an expected failure.
+
+Build the CLI, then run the comparison on an **idle foc-devnet Docker daemon**:
+
+```bash
+cargo build --locked
+python3 scripts/run-fwss-regression.py \
+  --services-repo /absolute/path/to/filecoin-services \
+  --baseline v1.4.0 \
+  --candidate refactor/fwss-modular-dispatch \
+  --output /absolute/path/to/new-regression-run
+```
+
+Both refs are configurable and resolved from the local repository to committed
+SHAs before execution. Fetch remote branches first when needed, and pass an
+`origin/branch` ref to test that remote commit. Uncommitted contract changes are
+not included. Use `--prepare-only` to resolve refs without starting a network.
+Use `--dependencies resolved.json` to reuse output from
+`scripts/resolve-ci-dependencies.py resolve`; otherwise the existing `default`
+dependency profile is used. Both runs use the baseline's PDP submodule revision.
+
+To require an actual dispatcher deployment, add `--require-dispatch`:
+
+```bash
+python3 scripts/run-fwss-regression.py \
+  --services-repo /absolute/path/to/filecoin-services \
+  --baseline v1.4.0 \
+  --candidate feat/erc-8167-routing \
+  --require-dispatch \
+  --output /absolute/path/to/new-dispatch-run
+```
+
+This checks the live ERC1967 implementation, ERC-8167 enumeration, nonempty
+delegate code, and coverage of baseline public methods other than initial setup
+and migration, and requires `terminateService` to route outside the dispatcher.
+A branch containing dispatcher source but deploying the monolith
+fails this check. Runtime hashes and selector destinations are recorded in
+`candidate/dispatch.json`.
+
+The command initializes and builds two isolated environments serially, starts
+each, runs the regression suite, and stops it. It does not delete run data. It
+refuses existing foc-devnet containers/networks because the existing `start` and
+`stop` commands sweep those resources across base directories. Do not launch
+another foc-devnet while a comparison is running. The check repeats before each
+start and cleanup; cleanup refuses resources belonging to another run. This is
+not a daemon-wide lock: use a dedicated Docker daemon for concurrent automation.
+Initial builds can take a long
+time and require substantial disk space.
+
+Results are in `comparison.json`, with per-revision `scenarios.md`, dependency
+metadata and command logs. The output directory is private: initialization and
+deployment logs can contain development keys. Do not upload the entire directory
+or `devnet-info.json` as public CI artifacts. Share only inspected, redacted logs
+and the summary. A failed setup is reported separately from a scenario failure;
+both make the command exit nonzero. Missing steps never count as PASS.
+
+On an already running disposable DevNet, run only the business suite:
+
+```bash
+FOC_DEVNET_BASEDIR=/absolute/path/to/devnet python3 scenarios/run.py --fwss-regression
+```
+
+For a dispatch check on that network, also pass `--require-dispatch` and set
+`FWSS_BASELINE_ABI` to the baseline's
+`service_contracts/abi/FilecoinWarmStorageService.abi.json`.
+
+This is a **fresh-deployment** comparison. It does not prove migration of a
+populated legacy proxy, signature continuity/replay across an upgrade, or every
+pricing and fault boundary. Those require the actual integrated migration path
+and the corresponding contract tests; `comparison.json` explicitly records
+`migration: NOT_RUN`.
+
 Scenario tests are Python scripts that validate devnet state after startup. They share a single running devnet and execute serially in a defined order. The runner lives in `scenarios/` and uses **only Python stdlib** — no `pip install` required.
 
 ### Running scenarios
