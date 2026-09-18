@@ -164,10 +164,10 @@ Running multiple Service Providers (SPs) locally requires them to communicate wi
 
 foc-devnet solves this by using `host.docker.internal` as a unified endpoint that works consistently from both the host and all containers.
 
-**Setup (mostly automatic):**
+**Setup:**
 1. Verify `/etc/hosts` has: `127.0.0.1 host.docker.internal`
-   - On macOS with Docker Desktop: automatic
-   - On Linux: foc-devnet checks for this and provides setup instructions
+   - Required on the host on both macOS and Linux; Docker's container DNS does not guarantee host-side resolution
+   - foc-devnet checks this before startup and provides setup instructions
 2. Each Curio container launches with: `--add-host=host.docker.internal:host-gateway`
 3. SPs register in the service provider registry as: `http://host.docker.internal:<port>`
 4. Curio runs with `CURIO_PULL_ALLOW_INSECURE=1` to allow HTTP/internal connections
@@ -179,11 +179,10 @@ foc-devnet solves this by using `host.docker.internal` as a unified endpoint tha
 
 ### Setup Requirements
 
-**macOS with Docker Desktop:**
-- Works automatically, no setup needed
-
-**Linux:**
-Add this line to `/etc/hosts`:
+**macOS with Docker Desktop and Linux:**
+If `host.docker.internal` does not resolve to `127.0.0.1` on the host, add this
+line to `/etc/hosts`. Docker Desktop resolving this name inside containers is
+separate from the host operating system resolving it:
 ```bash
 echo '127.0.0.1 host.docker.internal' | sudo tee -a /etc/hosts
 ```
