@@ -234,3 +234,34 @@ class RegressionCommandTests(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 module.require_unused_devnet_daemon(own)
+
+    def test_cleanup_removes_only_the_runs_portainer(self):
+        import importlib.util
+        from unittest.mock import patch
+
+        spec = importlib.util.spec_from_file_location("regression", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with patch.object(
+            module.subprocess, "check_output", return_value="abc123\n"
+        ) as listing, patch.object(module.subprocess, "run") as removal:
+            removal.return_value.returncode = 0
+            module.remove_owned_portainer("20260918T1200_Test")
+            self.assertEqual(
+                listing.call_args.args[0],
+                [
+                    "docker",
+                    "ps",
+                    "-aq",
+                    "--filter",
+                    "name=^foc-20260918T1200_Test-portainer$",
+                ],
+            )
+            self.assertEqual(
+                removal.call_args.args[0], ["docker", "rm", "-f", "abc123"]
+            )
+        with patch.object(
+            module.subprocess, "check_output", return_value=""
+        ), patch.object(module.subprocess, "run") as removal:
+            module.remove_owned_portainer("20260918T1200_Test")
+            removal.assert_not_called()

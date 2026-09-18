@@ -4,8 +4,42 @@ import {
   assertReceiptSucceeded,
   calculateExpectedStorageRate,
   calculateSettlementAmounts,
+  classifyProofPollError,
   findRevertErrorName,
 } from './lifecycle-assertions.ts'
+
+test('known Lotus state-fork read error is classified for polling retry', () => {
+  const error = {
+    cause: {
+      code: -32002,
+      message: 'required historical state unavailable: refusing explicit call due to state fork at epoch 200',
+      data: 200,
+    },
+  }
+  assert.deepEqual(classifyProofPollError(error), { retry: true, epoch: 200 })
+})
+
+test('unknown proof-poll errors remain fatal', () => {
+  const errors = [
+    new TypeError('data?.slice is not a function'),
+    {
+      code: -32002,
+      message: 'required historical state unavailable: refusing explicit call due to state fork at epoch 200',
+      data: '200',
+    },
+    {
+      code: -32001,
+      message: 'required historical state unavailable: refusing explicit call due to state fork at epoch 200',
+      data: 200,
+    },
+  ]
+  for (const error of errors) {
+    assert.throws(
+      () => classifyProofPollError(error),
+      (thrown) => thrown === error
+    )
+  }
+})
 
 test('storage rate is derived from size and the on-chain price list', () => {
   assert.equal(

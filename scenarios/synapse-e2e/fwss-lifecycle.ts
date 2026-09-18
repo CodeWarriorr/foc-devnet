@@ -12,8 +12,10 @@ import {
   writeContract,
 } from 'viem/actions'
 import {
+  createPublicClient,
   decodeAbiParameters,
   encodeAbiParameters,
+  http,
   parseAbi,
   parseEventLogs,
   toHex,
@@ -27,6 +29,7 @@ import {
   assertReceiptSucceeded,
   calculateExpectedStorageRate,
   calculateSettlementAmounts,
+  classifyProofPollError,
   findRevertErrorName,
 } from './lifecycle-assertions.ts'
 import { assertOnchainState } from './onchain.ts'
@@ -270,42 +273,57 @@ type CompletedProof = {
 }
 
 async function waitForCompletedProof(
-  synapse: ScenarioSynapse,
   environment: ScenarioEnvironment,
   dataSetId: bigint,
   initialLastProvenEpoch: bigint
 ): Promise<CompletedProof> {
   assert(environment.contracts != null, 'Devnet contract exports are required')
-  const [maxProvingPeriod] = await readContract(synapse.client, {
-    address: environment.contracts.fwssStateView,
-    abi: stateViewAbi,
-    functionName: 'getPDPConfig',
+  const proofClient = createPublicClient({
+    chain: environment.chain,
+    transport: http(),
+    ccipRead: false,
   })
   const started = Date.now()
   let observedLastProven = initialLastProvenEpoch
   let observedFirstPeriod = false
   while (Date.now() - started < proofTimeoutMilliseconds()) {
-    const [lastProvenEpoch, activationEpoch, firstPeriodProven, blockNumber] = await Promise.all([
-      readContract(synapse.client, {
-        address: environment.contracts.pdpVerifier,
-        abi: pdpAbi,
-        functionName: 'getDataSetLastProvenEpoch',
-        args: [dataSetId],
-      }),
-      readContract(synapse.client, {
-        address: environment.contracts.fwssStateView,
-        abi: stateViewAbi,
-        functionName: 'provingActivationEpoch',
-        args: [dataSetId],
-      }),
-      readContract(synapse.client, {
-        address: environment.contracts.fwssStateView,
-        abi: stateViewAbi,
-        functionName: 'provenPeriods',
-        args: [dataSetId, 0n],
-      }),
-      getBlockNumber(synapse.client),
-    ])
+    let poll
+    try {
+      poll = await Promise.all([
+        readContract(proofClient, {
+          address: environment.contracts.fwssStateView,
+          abi: stateViewAbi,
+          functionName: 'getPDPConfig',
+        }),
+        readContract(proofClient, {
+          address: environment.contracts.pdpVerifier,
+          abi: pdpAbi,
+          functionName: 'getDataSetLastProvenEpoch',
+          args: [dataSetId],
+        }),
+        readContract(proofClient, {
+          address: environment.contracts.fwssStateView,
+          abi: stateViewAbi,
+          functionName: 'provingActivationEpoch',
+          args: [dataSetId],
+        }),
+        readContract(proofClient, {
+          address: environment.contracts.fwssStateView,
+          abi: stateViewAbi,
+          functionName: 'provenPeriods',
+          args: [dataSetId, 0n],
+        }),
+        getBlockNumber(proofClient),
+      ])
+    } catch (error) {
+      const stateFork = classifyProofPollError(error)
+      console.log(
+        `Proof polling crossed unavailable state at fork epoch ${stateFork.epoch}; retrying within the proof timeout`
+      )
+      await delay(5_000)
+      continue
+    }
+    const [[maxProvingPeriod], lastProvenEpoch, activationEpoch, firstPeriodProven, blockNumber] = poll
     observedLastProven = lastProvenEpoch
     observedFirstPeriod = firstPeriodProven
     const deadline = activationEpoch + maxProvingPeriod
@@ -574,7 +592,6 @@ async function main(): Promise<void> {
   for (let index = 0; index < result.copies.length; index++) {
     completedProofs.push(
       await waitForCompletedProof(
-        synapse,
         environment,
         result.copies[index].dataSetId,
         initialProofEpochs[index]
