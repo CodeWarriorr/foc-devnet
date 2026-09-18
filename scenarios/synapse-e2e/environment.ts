@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { calibration, mainnet } from '@filoz/synapse-core/chains'
 import { toChain, validateDevnetInfo } from '@filoz/synapse-core/devnet'
 import type { SynapseOptions } from '@filoz/synapse-sdk'
+import type { Address } from 'viem'
 
 export type ScenarioEnvironment = {
   chain: NonNullable<SynapseOptions['chain']>
@@ -13,6 +14,11 @@ export type ScenarioEnvironment = {
   privateKey: `0x${string}`
   runId?: string
   user?: { name: string; evm_addr: string }
+  contracts?: {
+    filecoinPay: Address
+    fwssStateView: Address
+    pdpVerifier: Address
+  }
 }
 
 export function freshMetadata(kind: string): Record<string, string> {
@@ -58,5 +64,10 @@ export function resolveEnvironment(options: { defaultUserIndex: number; requireF
     privateKey: (process.env.PRIVATE_KEY ?? user.private_key_hex) as `0x${string}`,
     runId: devnet.info.run_id,
     user,
+    contracts: {
+      filecoinPay: devnet.info.contracts.filecoin_pay_v1_addr as Address,
+      fwssStateView: devnet.info.contracts.fwss_state_view_addr as Address,
+      pdpVerifier: devnet.info.contracts.pdp_verifier_proxy_addr as Address,
+    },
   }
 }
