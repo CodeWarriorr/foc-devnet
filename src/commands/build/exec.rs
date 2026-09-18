@@ -5,8 +5,7 @@
 use super::docker;
 use super::logging;
 use super::Project;
-use crate::docker::core::{get_current_gid, get_current_uid};
-use std::fs::OpenOptions;
+use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -27,13 +26,7 @@ pub fn run_build_in_container(
 
     // Create log file for this build
     let log_path = logging::create_build_log_path()?;
-    fix_directory_ownership(
-        log_path
-            .parent()
-            .unwrap()
-            .to_str()
-            .ok_or("Invalid log path")?,
-    )?;
+    let log_file = logging::open_build_log(&log_path)?;
     info!("Logs will be saved to: {}", log_path.display());
 
     let container_source_dir = "/workspace/source";
@@ -44,7 +37,7 @@ pub fn run_build_in_container(
     let build_script =
         docker::setup_build_script(project, container_source_dir, container_output_dir);
 
-    execute_build_process(docker_run_args, build_script, &log_path, project)?;
+    execute_build_process(docker_run_args, build_script, log_file, &log_path, project)?;
 
     info!("Build logs saved to: {}", log_path.display());
 
@@ -55,6 +48,7 @@ pub fn run_build_in_container(
 pub fn execute_build_process(
     mut docker_run_args: Vec<String>,
     build_script: String,
+    log_file: File,
     log_path: &Path,
     project: &Project,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -70,12 +64,6 @@ pub fn execute_build_process(
     // Get handles to stdout and stderr
     let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
     let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
-
-    // Create log file
-    let log_file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)?;
 
     info!("NOTE: StdErr output does not necessarily indicate failure");
 
@@ -119,25 +107,6 @@ pub fn execute_build_process(
             log_path.display()
         )
         .into());
-    }
-
-    Ok(())
-}
-
-/// Fix ownership of a directory to the current user.
-///
-/// This ensures the Docker container (running as current user) can access the directory.
-fn fix_directory_ownership(dir: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let uid = get_current_uid()?;
-    let gid = get_current_gid()?;
-
-    let output = Command::new("sudo")
-        .args(["chown", "-R", &format!("{}:{}", uid, gid), dir])
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to fix ownership of {}: {}", dir, stderr).into());
     }
 
     Ok(())
