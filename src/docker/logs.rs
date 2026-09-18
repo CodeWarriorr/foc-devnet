@@ -43,6 +43,13 @@ fn list_all_containers() -> Result<Vec<ContainerInfo>, Box<dyn Error>> {
     Ok(result)
 }
 
+impl ContainerInfo {
+    fn log_filename(&self) -> String {
+        let safe_image = self.image.replace([':', '/'], "_");
+        format!("{}.{}.docker.log", self.name, safe_image)
+    }
+}
+
 /// List all containers (running or stopped) belonging to foc-devnet: those whose
 /// image repository is recognized via `is_foc_devnet_image`, plus the per-SP
 /// database containers, which run stock images (postgres/scylla) and so are
@@ -69,8 +76,7 @@ pub fn persist_foc_container_logs(run_id: &str) -> Result<(), Box<dyn Error>> {
     );
 
     for c in containers {
-        let safe_image = c.image.replace(':', "_");
-        let file_path = logs_dir.join(format!("{}.{}.docker.log", c.name, safe_image));
+        let file_path = logs_dir.join(c.log_filename());
         let content = match get_container_logs(&c.name) {
             Ok(logs) => {
                 info!("✓ Captured logs for container '{}'", c.name);
@@ -142,4 +148,22 @@ pub fn write_post_start_status_log(run_id: &str) -> Result<PathBuf, Box<dyn Erro
     fs::write(&status_file, content)?;
     info!("✓ Post-start status logged");
     Ok(status_file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ContainerInfo;
+
+    #[test]
+    fn namespaced_image_logs_use_one_filename() {
+        let container = ContainerInfo {
+            name: "foc-test-scylla-2".into(),
+            image: "scylladb/scylla:6.2".into(),
+            status: "running".into(),
+        };
+        assert_eq!(
+            container.log_filename(),
+            "foc-test-scylla-2.scylladb_scylla_6.2.docker.log"
+        );
+    }
 }

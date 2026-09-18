@@ -89,7 +89,8 @@ pub fn setup_foundry_project(
             }
         }
 
-        // Install dependencies
+        // The embedded archive includes .gitmodules but no Git index. Install
+        // plain dependency directories instead of re-registering submodules.
         let key = format!("usdfc_setup_install_deps_{}", run_id);
         let container_name = format!("foc-{}-usdfc-install-deps", run_id);
         let output = run_and_log_command(
@@ -106,8 +107,8 @@ pub fn setup_foundry_project(
                 "bash",
                 "-c",
                 "cd /workspace && \
-                 forge install OpenZeppelin/openzeppelin-contracts@v5.0.0 && \
-                 forge install foundry-rs/forge-std",
+                 forge install --no-git OpenZeppelin/openzeppelin-contracts@v5.0.0 && \
+                 forge install --no-git foundry-rs/forge-std",
             ],
             context,
             &key,
