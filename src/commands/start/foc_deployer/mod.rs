@@ -12,6 +12,11 @@ use crate::paths::foc_devnet_bin;
 use std::error::Error;
 use tracing::{info, warn};
 
+/// Snake-case summary key of the contract that serves FWSS view methods.
+const STATE_VIEW_KEY: &str = "filecoin_warm_storage_service_state_view";
+/// Snake-case summary key of the FWSS proxy.
+const FWSS_PROXY_KEY: &str = "filecoin_warm_storage_service_proxy";
+
 /// Deployment result containing contract addresses and network metadata
 pub struct DeploymentResult {
     /// Map of contract names to addresses
@@ -169,6 +174,22 @@ if [ "$PDP_CONSTRUCTOR_INPUTS" = "4" ] && [ -z "$PDP_VERIFIER_IMPLEMENTATION_ADD
     echo "Failed to extract PDPVerifier implementation address"
     exit 1
   fi
+fi
+
+# filecoin-services with the modular FWSS assembles its ERC-8167 dispatcher with
+# the `evm` assembler pinned in its Makefile, which the builder image lacks.
+# `make install-evm` needs a newer git than the image has, so build the pinned
+# revision here. Older releases have no erc8167 target and skip this.
+if grep -q '^erc8167:' Makefile && ! command -v evm >/dev/null; then
+  echo "Building the evm assembler for the ERC-8167 dispatcher"
+  EVM_REVISION="$(sed -n 's/^EVM_REVISION := //p' Makefile)"
+  EVM_SRC="$(mktemp -d)"
+  git -C "$EVM_SRC" init -q
+  git -C "$EVM_SRC" fetch -q --depth 1 https://github.com/wjmelements/evm.git "$EVM_REVISION"
+  git -C "$EVM_SRC" checkout -q FETCH_HEAD
+  git -C "$EVM_SRC" submodule update -q --init --recursive --depth 1
+  make -C "$EVM_SRC" bin/evm
+  install "$EVM_SRC/bin/evm" /home/foc-user/.foundry/bin/evm
 fi
 
 bash /service_contracts/tools/warm-storage-deploy-all.sh 2>&1 | tee /tmp/foc-deploy.log"#,
@@ -416,6 +437,15 @@ pub fn parse_deployment_output(output_str: &str) -> Result<DeploymentResult, Box
         );
     }
 
+    // The modular FWSS proxy serves the view methods itself and newer deploy
+    // scripts no longer deploy a StateView, so point the view address at the proxy.
+    if !addresses.contains_key(STATE_VIEW_KEY) {
+        if let Some(proxy) = addresses.get(FWSS_PROXY_KEY).cloned() {
+            info!("No StateView in deployment output; using the FWSS proxy for view calls");
+            addresses.insert(STATE_VIEW_KEY.to_string(), proxy);
+        }
+    }
+
     let metadata = FOCMetadata {
         network_name,
         challenge_finality,
@@ -474,4 +504,37 @@ fn to_snake_case(name: &str) -> String {
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SUMMARY: &str = "\
+# DEPLOYMENT SUMMARY (devnet)
+FilecoinPayV1 Contract: 0x0000000000000000000000000000000000000001
+FilecoinWarmStorageService Implementation: 0x0000000000000000000000000000000000000002
+FilecoinWarmStorageService Proxy: 0x0000000000000000000000000000000000000003
+";
+
+    #[test]
+    fn missing_state_view_falls_back_to_fwss_proxy() {
+        let result = parse_deployment_output(SUMMARY).unwrap();
+        assert_eq!(
+            result.addresses.get(STATE_VIEW_KEY),
+            result.addresses.get(FWSS_PROXY_KEY)
+        );
+    }
+
+    #[test]
+    fn deployed_state_view_is_kept() {
+        let output = format!(
+            "{SUMMARY}FilecoinWarmStorageService StateView: 0x0000000000000000000000000000000000000004\n"
+        );
+        let result = parse_deployment_output(&output).unwrap();
+        assert_eq!(
+            result.addresses[STATE_VIEW_KEY],
+            "0x0000000000000000000000000000000000000004"
+        );
+    }
 }
