@@ -1322,7 +1322,7 @@ cargo build --locked
 python3 scripts/run-fwss-regression.py \
   --services-repo /absolute/path/to/filecoin-services \
   --baseline v1.4.0 \
-  --candidate refactor/fwss-modular-dispatch \
+  --candidate origin/refactor/remove-fwss-monolith \
   --output /absolute/path/to/new-regression-run
 ```
 
@@ -1340,17 +1340,26 @@ To require an actual dispatcher deployment, add `--require-dispatch`:
 python3 scripts/run-fwss-regression.py \
   --services-repo /absolute/path/to/filecoin-services \
   --baseline v1.4.0 \
-  --candidate feat/erc-8167-routing \
+  --candidate origin/refactor/remove-fwss-monolith \
   --require-dispatch \
   --output /absolute/path/to/new-dispatch-run
 ```
 
 This checks the live ERC1967 implementation, ERC-8167 enumeration, nonempty
-delegate code, and coverage of baseline public methods other than initial setup
-and migration, and requires `terminateService` to route outside the dispatcher.
-A branch containing dispatcher source but deploying the monolith
+delegate code, and coverage of baseline public methods other than initial setup,
+migration, and the monolith's upgrade surface (`announceUpgradePlan`,
+`upgradeToAndCall`, `setViewContract`, `proxiableUUID`,
+`UPGRADE_INTERFACE_VERSION`), and requires `terminateService` to route outside
+the dispatcher. A branch containing dispatcher source but deploying the monolith
 fails this check. Runtime hashes and selector destinations are recorded in
 `candidate/dispatch.json`.
+
+Candidates that deploy the modular FWSS need no extra setup. If
+`warm-storage-deploy-all.sh` does not print a `FilecoinWarmStorageService
+StateView`, foc-devnet uses the FWSS proxy as the view address, because the
+proxy serves the view methods itself. During deployment foc-devnet also builds
+the `evm` assembler at the revision pinned in the candidate's Makefile, which
+needs network access and adds about a minute.
 
 The command initializes and builds two isolated environments serially, starts
 each, runs the regression suite, and stops it, including its own Portainer
@@ -1379,6 +1388,16 @@ FOC_DEVNET_BASEDIR=/absolute/path/to/devnet python3 scenarios/run.py --fwss-regr
 For a dispatch check on that network, also pass `--require-dispatch` and set
 `FWSS_BASELINE_ABI` to the baseline's
 `service_contracts/abi/FilecoinWarmStorageService.abi.json`.
+
+To add a scenario, create `scenarios/test_fwss_<name>.py` and list it in
+`FWSS_REGRESSION_ORDER` in `scenarios/run.py`. The full comparison and the fast
+loop above then run it against both revisions, so keep assertions about
+business behavior and avoid depending on a revision's internal layout.
+
+The builds and `start` fetch dependencies from the network. The comparison
+retries each of those steps once (`--attempts`, default 2) and records the
+retry under `retried_steps` in `comparison.json`; a second failure fails the
+revision.
 
 This is a **fresh-deployment** comparison. It does not prove migration of a
 populated legacy proxy, signature continuity/replay across an upgrade, or every
