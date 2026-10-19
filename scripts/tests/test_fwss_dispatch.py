@@ -1,6 +1,10 @@
 import unittest
 
-from scenarios.test_fwss_dispatch import canonical_type, decode_selectors
+from scenarios.test_fwss_dispatch import (
+    canonical_type,
+    decode_selectors,
+    required_signatures,
+)
 
 
 def encode(selectors):
@@ -56,3 +60,19 @@ class DispatchChecks(unittest.TestCase):
         require_external_business_route(
             {"0x12345678": "0x" + "34" * 20}, ["0x12345678"], implementation
         )
+
+    def test_requires_business_methods_but_not_monolith_upgrade_surface(self):
+        abi = [
+            {"type": "function", "name": name, "inputs": []}
+            for name in (
+                "terminateService",
+                "initialize",
+                "migrate",
+                "announceUpgradePlan",
+                "upgradeToAndCall",
+                "setViewContract",
+                "proxiableUUID",
+                "UPGRADE_INTERFACE_VERSION",
+            )
+        ] + [{"type": "event", "name": "ServiceTerminated", "inputs": []}]
+        self.assertEqual(required_signatures(abi), ["terminateService()"])

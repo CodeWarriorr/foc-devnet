@@ -6,9 +6,9 @@ import { getPdpDataSet, getPriceList } from '@filoz/synapse-core/warm-storage'
 import {
   getBlockNumber,
   getChainId,
+  getTransactionReceipt,
   readContract,
   simulateContract,
-  waitForTransactionReceipt,
   writeContract,
 } from 'viem/actions'
 import {
@@ -86,6 +86,22 @@ function proofTimeoutMilliseconds(): number {
   return value
 }
 
+// viem's waitForTransactionReceipt also fetches blocks by number, which Lotus
+// rejects for null rounds. Poll the receipt directly and retry RPC errors.
+async function waitForReceipt(synapse: ScenarioSynapse, hash: Hash, label: string) {
+  let lastError: unknown
+  for (let attempt = 0; attempt < 120; attempt++) {
+    try {
+      return await getTransactionReceipt(synapse.client, { hash })
+    } catch (error) {
+      lastError = error
+    }
+    await delay(1_000)
+  }
+  const details = lastError instanceof Error ? `: ${lastError.message}` : ''
+  throw new Error(`${label} transaction ${hash} was not confirmed${details}`)
+}
+
 async function send(
   synapse: ScenarioSynapse,
   request: Parameters<typeof writeContract>[1],
@@ -93,11 +109,7 @@ async function send(
 ) {
   const hash = (await writeContract(synapse.client, request)) as Hash
   console.log(`${label} submitted: ${hash}`)
-  const receipt = await waitForTransactionReceipt(synapse.client, {
-    hash,
-    pollingInterval: 1_000,
-    timeout: 120_000,
-  })
+  const receipt = await waitForReceipt(synapse, hash, label)
   assertReceiptSucceeded(receipt, label)
   return receipt
 }
