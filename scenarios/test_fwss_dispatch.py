@@ -50,14 +50,27 @@ def canonical_type(argument):
     return kind
 
 
+# Initial setup, migration, and the monolith's UUPS and view-contract upgrade
+# surface have architecture-specific signatures. The modular FWSS replaces them
+# with dispatcher routes (announceMigration, migrate, implementation).
+ARCHITECTURE_METHODS = {
+    "initialize",
+    "migrate",
+    "announceUpgradePlan",
+    "upgradeToAndCall",
+    "setViewContract",
+    "proxiableUUID",
+    "UPGRADE_INTERFACE_VERSION",
+}
+
+
 def required_signatures(abi):
-    # Initial setup and migration have architecture-specific signatures. All other
-    # legacy methods remain required unless the public contract is explicitly changed.
+    # All other legacy methods remain required unless the public contract is
+    # explicitly changed.
     return [
         item["name"] + "(" + ",".join(map(canonical_type, item["inputs"])) + ")"
         for item in abi
-        if item.get("type") == "function"
-        and item["name"] not in {"initialize", "migrate"}
+        if item.get("type") == "function" and item["name"] not in ARCHITECTURE_METHODS
     ]
 
 
