@@ -76,15 +76,29 @@ def run_side(args, side, report, common, output):
     step = "init"
     try:
 
-        def execute(name, argv, timeout=3600):
+        def execute(name, argv, timeout=3600, attempts=1):
+            # Builds and start fetch dependencies from the network and fail on
+            # transient errors. Retried steps log each attempt and are recorded.
             nonlocal step
             step = name
-            print(f"{side}: {name}", flush=True)
-            rc = command(argv, env, directory / f"{name}.log", timeout)
-            if rc:
-                raise RuntimeError(
-                    f"{name} exited {rc}; see {directory / (name + '.log')}"
+            for attempt in range(1, attempts + 1):
+                print(
+                    f"{side}: {name}"
+                    + (f" (attempt {attempt})" if attempt > 1 else ""),
+                    flush=True,
                 )
+                suffix = "" if attempt == 1 else f"-attempt{attempt}"
+                log = directory / f"{name}{suffix}.log"
+                rc = command(argv, env, log, timeout)
+                if not rc:
+                    return
+                if attempt < attempts:
+                    record.setdefault("retried_steps", {})[name] = attempt
+                    if name == "start":
+                        command(
+                            [binary, "stop"], env, directory / "stop-retry.log", 180
+                        )
+            raise RuntimeError(f"{name} exited {rc}; see {log}")
 
         execute("init", [binary, "init", *dependencies.build_init_args(components)])
         step = "verify-checkouts"
@@ -102,12 +116,12 @@ def run_side(args, side, report, common, output):
         env.update(
             dependencies.scenario_environment(metadata_path, metadata["components"])
         )
-        execute("build-lotus", [binary, "build", "lotus"])
-        execute("build-curio", [binary, "build", "curio"])
+        execute("build-lotus", [binary, "build", "lotus"], attempts=args.attempts)
+        execute("build-curio", [binary, "build", "curio"], attempts=args.attempts)
         step = "pre-start-daemon-check"
         require_unused_devnet_daemon()
         started = True
-        execute("start", [binary, "start"], timeout=1800)
+        execute("start", [binary, "start"], timeout=1800, attempts=args.attempts)
         env["FWSS_BASELINE_ABI"] = str(output / "baseline-abi.json")
         env["FWSS_DISPATCH_REPORT"] = str(directory / "dispatch.json")
         scenario_args = [
@@ -233,6 +247,12 @@ def main():
         "--dependencies",
         type=Path,
         help="Reuse metadata from resolve-ci-dependencies.py instead of resolving the default profile",
+    )
+    parser.add_argument(
+        "--attempts",
+        type=int,
+        default=2,
+        help="Attempts for the network-bound build and start steps (default 2)",
     )
     parser.add_argument(
         "--require-dispatch",
