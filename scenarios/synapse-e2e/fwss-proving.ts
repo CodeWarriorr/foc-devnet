@@ -11,8 +11,11 @@ import { freshMetadata, resolveEnvironment, type ScenarioEnvironment } from './e
 import {
   contractsOf,
   delay,
+  depositHeadroom,
+  expectedProvenGross,
   expectedStorageRate,
   settleExactly,
+  waitForCurrentPeriodEnd,
   waitForNextChallenge,
   waitForPeriodEnd,
   waitForReceipt,
@@ -84,6 +87,7 @@ async function main(): Promise<void> {
   removed[0] ^= 0xff
   const size = BigInt(kept.byteLength)
   await prepareAccount(synapse, 2n * size)
+  await depositHeadroom(synapse)
   const context = await createFreshContext(synapse, providerId, freshMetadata('fwss-proving'))
   const preparation = await synapse.storage.prepare({ context, pieceSizes: [size, size] })
   if (preparation.transaction != null) {
@@ -152,8 +156,24 @@ async function main(): Promise<void> {
   const downloaded = await context.download({ pieceCid: keptPiece.pieceCid })
   assert(Buffer.from(downloaded).equals(kept), 'Remaining piece differs from uploaded bytes')
 
+  // The two-piece rate applies through the repricing block and the one-piece rate after it.
+  const current = await waitForCurrentPeriodEnd(synapse, environment, dataSetId)
+  const { gross, segments } = await expectedProvenGross(
+    synapse,
+    environment,
+    dataSetId,
+    railId,
+    resumed.deadline,
+    current.deadline
+  )
+  assert(
+    segments.some((s) => s.rate === rate) && segments.some((s) => s.rate === reducedRate),
+    'Settlement range does not span the rate change'
+  )
+  await settleExactly(synapse, environment, railId, current.deadline, gross, 'Settlement across the rate change')
+
   console.log(
-    '=== SUCCESS: FWSS proving scope verified: proven, missed, and resumed periods, exact settlement across the missed period, piece removal, and reduced rate ==='
+    '=== SUCCESS: FWSS proving scope verified: proven, missed, and resumed periods, exact settlement across the missed period, piece removal, reduced rate, and exact settlement across the rate change ==='
   )
 }
 
