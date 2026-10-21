@@ -1434,7 +1434,7 @@ that the comparison leaves out. It is not in any scenario order. Run it on a dev
 ```bash
 FOC_DEVNET_BASEDIR=/absolute/path/to/baseline/devnet \
 FWSS_TRANSITION_SERVICES_REPO=/absolute/path/to/filecoin-services \
-FWSS_TRANSITION_CANDIDATE=origin/refactor/fwss-modular-dispatch \
+FWSS_TRANSITION_CANDIDATE=origin/main \
 FWSS_TRANSITION_EVIDENCE_DIR=/absolute/path/to/evidence \
 python3 scenarios/test_fwss_transition.py
 ```
@@ -1444,15 +1444,16 @@ the candidate's pinned `evm` and `josuke` into a temporary directory. The
 scenario runs in three phases:
 
 1. **Prepare** on v1.4.0: datasets with proven periods, a settled storage rail,
-   settled FilBeam CDN rails, a session key, and a presigned add-pieces
-   signature. It snapshots the views through the v1.4.0 StateView.
+   settled FilBeam CDN rails, a terminated data set, a session key, a presigned
+   add-pieces signature, and a consumed one.
 2. **Transition** with `scenarios/fwss-transition-upgrade.sh`. Before the
    execute step it leaves an unproven piece and a scheduled removal in place.
    Departures from the checklist are marked `# DEVNET:` in the script.
 3. **Continue** on the dispatcher: view parity between the proxy and the old
    StateView, proofs and exact settlement across the upgrade, the scheduled
-   removal, signature replay protection, the session key, CDN settlement, and a
-   new dataset.
+   removal, replay protection for both signatures, the terminated data set's end
+   and payment, the session key, CDN settlement and termination, and a new CDN
+   dataset.
 
 The evidence directory keeps the upgrade log, the ledgers after A1 and at the
 end, the forge gas table (`rollout-evidence.md`), and proving gas before and
