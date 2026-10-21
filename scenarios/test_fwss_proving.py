@@ -6,6 +6,7 @@ import os, sys  # noqa: E401
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -49,15 +50,23 @@ def run():
         write_random_file(random_file, RAND_FILE_SIZE, RAND_FILE_SEED)
 
         info("Running FWSS missed-proof and deletion scenario against devnet")
-        run_node_script(
-            runtime,
-            "fwss-proving.ts",
-            "FWSS proving, missed period, and piece deletion",
-            args=[str(random_file)],
-            env=runtime_env,
-            timeout=SCENARIO_TIMEOUT_SECS,
-            retry_state_forks=False,
-        )
+        try:
+            run_node_script(
+                runtime,
+                "fwss-proving.ts",
+                "FWSS proving, missed period, and piece deletion",
+                args=[str(random_file)],
+                env=runtime_env,
+                timeout=SCENARIO_TIMEOUT_SECS,
+                retry_state_forks=False,
+            )
+        finally:
+            # A timeout kills Node before its own unpause runs; unpausing a running
+            # container fails harmlessly.
+            subprocess.run(
+                ["docker", "unpause", runtime_env["FWSS_PROVIDER_CONTAINER"]],
+                capture_output=True,
+            )
 
 
 if __name__ == "__main__":

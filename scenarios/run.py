@@ -72,6 +72,12 @@ def _run_single_test(scenario_py_file, name, timeout_sec):
         os.killpg(process.pid, signal.SIGKILL)
         process.wait()
         stdout, return_code = f"[ERROR] Exception during test execution: {e}", -1
+    except BaseException:
+        # The test runs in its own session, so Ctrl-C and the runner's SIGTERM
+        # reach only this process.
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        raise
 
     log_lines = stdout.splitlines()
     if timed_out:
@@ -134,6 +140,7 @@ if __name__ == "__main__":
     parser.add_argument("--fwss-regression", action="store_true")
     parser.add_argument("--require-dispatch", action="store_true")
     args = parser.parse_args()
+    signal.signal(signal.SIGTERM, lambda signum, _frame: sys.exit(128 + signum))
     if args.require_dispatch and not args.fwss_regression:
         parser.error("--require-dispatch requires --fwss-regression")
     order = list(FWSS_REGRESSION_ORDER if args.fwss_regression else ORDER)
