@@ -962,6 +962,7 @@ Steps run sequentially by default, or in parallel when using the `--parallel` fl
 **FOC Deploy Step:**
    - Deploy FOC service contracts
    - Deploy PDPVerifier, ServiceProviderRegistry, etc.
+   - Set the FOC deployer as the FilBeam controller, so scenarios can settle and terminate CDN rails
    - Save all contract addresses
 
 **Database Step:**
@@ -980,7 +981,7 @@ Steps run sequentially by default, or in parallel when using the `--parallel` fl
 
 **User Setup Step:**
    - Set up USER_1 for FOC: approve and deposit USDFC into FilecoinPay, approve FWSS as operator
-   - Export `devnet-info.json` to `~/.foc-devnet/run/<run-id>/devnet-info.json`
+   - Export `devnet-info.json` to `~/.foc-devnet/run/<run-id>/devnet-info.json`; `foc_deployer` holds the key that owns the FOC contracts
    - After this step, USER_1 can interact with FOC storage services via synapse-sdk
    - USER_2 and USER_3 are funded with USDFC but not configured for FOC
 

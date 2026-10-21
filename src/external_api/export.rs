@@ -44,6 +44,7 @@ fn build_devnet_info(ctx: &SetupContext) -> Result<DevnetInfoV2, Box<dyn std::er
             .get("step_timing_total_execution_time")
             .unwrap_or_else(|| "in-progress".to_string()),
         users: build_users(ctx)?,
+        foc_deployer: build_single_user(ctx, "DEPLOYER_FOC", &load_mnemonic()?.to_seed(""))?,
         contracts: build_contracts(ctx)?,
         lotus: build_lotus_info(ctx)?,
         lotus_miner: build_lotus_miner_info(ctx)?,
