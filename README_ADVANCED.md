@@ -1417,14 +1417,14 @@ revision.
 This is a **fresh-deployment** comparison. It does not prove migration of a
 populated legacy proxy, signature continuity/replay across an upgrade, or every
 pricing and fault boundary; `comparison.json` explicitly records
-`migration: NOT_RUN`. The transition rehearsal below covers the migration path.
+`migration: NOT_RUN`.
 
 ### FWSS v1.4.0 transition rehearsal (temporary)
 
 `scenarios/test_fwss_transition.py` upgrades a populated v1.4.0 proxy to the
 ERC-8167 dispatcher with the commands from the candidate's
-`service_contracts/UPGRADE-CHECKLIST.md` (path A). It is not in any scenario
-order. Run it on a devnet that deployed v1.4.0, for example one started with
+`service_contracts/UPGRADE-CHECKLIST.md` (path A), covering the migration path
+that the comparison leaves out. It is not in any scenario order. Run it on a devnet that deployed v1.4.0, for example one started with
 `--only baseline --keep-running`:
 
 ```bash
