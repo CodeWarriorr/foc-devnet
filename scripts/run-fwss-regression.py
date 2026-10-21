@@ -131,7 +131,16 @@ def run_side(args, side, report, common, output):
         ]
         if side == "candidate" and args.require_dispatch:
             scenario_args.append("--require-dispatch")
-        execute("scenarios", scenario_args, timeout=3600)
+        if args.keep_running:
+            # Lets later scenario runs reuse this network without the caller's shell.
+            (directory / "scenario-env.json").write_text(
+                json.dumps(
+                    {k: v for k, v in env.items() if os.environ.get(k) != v}, indent=2
+                )
+                + "\n"
+            )
+        # Covers the sum of the per-scenario timeouts in FWSS_REGRESSION_ORDER.
+        execute("scenarios", scenario_args, timeout=10800)
         record["status"] = "PASS"
     except (
         OSError,
@@ -142,7 +151,7 @@ def run_side(args, side, report, common, output):
     ) as error:
         record.update(failed_step=step, error=str(error))
     finally:
-        if started:
+        if started and not args.keep_running:
             try:
                 run_file = base / "state/current_runid.json"
                 run_id = (
@@ -259,7 +268,20 @@ def main():
         action="store_true",
         help="Fail unless candidate actually deploys ERC-8167 and preserves baseline public methods",
     )
+    parser.add_argument(
+        "--only",
+        choices=("baseline", "candidate"),
+        help="Run one revision instead of the comparison",
+    )
+    parser.add_argument(
+        "--keep-running",
+        action="store_true",
+        help="Leave the DevNet running after the scenarios; requires --only",
+    )
     args = parser.parse_args()
+    if args.keep_running and not args.only:
+        parser.error("--keep-running requires --only")
+    sides = (args.only,) if args.only else ("baseline", "candidate")
     repo = args.services_repo.resolve()
     report = {
         "scope": "fresh-deployment FWSS lifecycle; not a populated-proxy migration",
@@ -281,19 +303,23 @@ def main():
     os.umask(0o077)
     try:
         require_unused_devnet_daemon()
+        # Both revisions run on the PDPVerifier the candidate ships with: the one
+        # live networks run when the candidate deploys. v1.4.0's gitlink reports
+        # VERSION 3.4.0 but requires processPieceDeletions, which Curio only runs
+        # for versions above 3.4.0, so scheduled removals would never drain.
         pdp = subprocess.check_output(
             [
                 "git",
                 "-C",
                 str(repo),
                 "ls-tree",
-                report["baseline"]["commit"],
+                report["candidate"]["commit"],
                 "service_contracts/lib/pdp",
             ],
             text=True,
         ).split()
         if len(pdp) != 4 or pdp[:2] != ["160000", "commit"]:
-            raise ValueError("Baseline has no PDP submodule gitlink")
+            raise ValueError("Candidate has no PDP submodule gitlink")
         if args.dependencies:
             common = json.loads(args.dependencies.read_text())
         else:
@@ -325,16 +351,15 @@ def main():
             raise ValueError("Baseline ABI is required for dispatcher verification")
         if abi.returncode == 0:
             (output / "baseline-abi.json").write_text(abi.stdout)
-        for side in ("baseline", "candidate"):
+        for side in {"baseline", "candidate"} - set(sides):
+            report[side]["status"] = "NOT_RUN"
+        for side in sides:
             run_side(args, side, report, common, output)
             if report[side].get("cleanup_error"):
                 break
         report["status"] = (
             "PASS"
-            if all(
-                report[side].get("status") == "PASS"
-                for side in ("baseline", "candidate")
-            )
+            if all(report[side].get("status") == "PASS" for side in sides)
             else "FAIL"
         )
     except (

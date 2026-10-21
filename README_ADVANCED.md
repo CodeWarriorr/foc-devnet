@@ -1333,7 +1333,10 @@ SHAs before execution. Fetch remote branches first when needed, and pass an
 not included. Use `--prepare-only` to resolve refs without starting a network.
 Use `--dependencies resolved.json` to reuse output from
 `scripts/resolve-ci-dependencies.py resolve`; otherwise the existing `default`
-dependency profile is used. Both runs use the baseline's PDP submodule revision.
+dependency profile is used. Both runs use the candidate's PDP submodule
+revision, which is what live networks run. The PDPVerifier pinned by v1.4.0
+reports VERSION 3.4.0 but needs `processPieceDeletions`, which Curio only sends
+for later versions, so scheduled piece removals would never take effect.
 
 To require an actual dispatcher deployment, add `--require-dispatch`:
 
@@ -1389,6 +1392,12 @@ FOC_DEVNET_BASEDIR=/absolute/path/to/devnet python3 scenarios/run.py --fwss-regr
 For a dispatch check on that network, also pass `--require-dispatch` and set
 `FWSS_BASELINE_ABI` to the baseline's
 `service_contracts/abi/FilecoinWarmStorageService.abi.json`.
+
+To get such a network from the comparison command, pass `--only baseline` or
+`--only candidate` with `--keep-running`. The command runs that revision only,
+leaves its devnet running, and writes the scenario environment it used to
+`<revision>/scenario-env.json`. When you are done, stop the devnet with
+`FOC_DEVNET_BASEDIR` from that file: `FOC_DEVNET_BASEDIR=... cargo run -- stop`.
 
 To add a scenario, create `scenarios/test_fwss_<name>.py` and list it in
 `FWSS_REGRESSION_ORDER` in `scenarios/run.py`. The full comparison and the fast
