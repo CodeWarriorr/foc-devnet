@@ -962,7 +962,7 @@ Steps run sequentially by default, or in parallel when using the `--parallel` fl
 **FOC Deploy Step:**
    - Deploy FOC service contracts
    - Deploy PDPVerifier, ServiceProviderRegistry, etc.
-   - Set the FOC deployer as the FilBeam controller, so scenarios can settle and terminate CDN rails
+   - Set the FOC deployer as the FilBeam controller, so scenarios can settle CDN rails
    - Save all contract addresses
 
 **Database Step:**
@@ -1328,7 +1328,7 @@ cargo build --locked
 python3 scripts/run-fwss-regression.py \
   --services-repo /absolute/path/to/filecoin-services \
   --baseline v1.4.0 \
-  --candidate origin/refactor/remove-fwss-monolith \
+  --candidate origin/refactor/fwss-modular-dispatch \
   --output /absolute/path/to/new-regression-run
 ```
 
@@ -1349,7 +1349,7 @@ To require an actual dispatcher deployment, add `--require-dispatch`:
 python3 scripts/run-fwss-regression.py \
   --services-repo /absolute/path/to/filecoin-services \
   --baseline v1.4.0 \
-  --candidate origin/refactor/remove-fwss-monolith \
+  --candidate origin/refactor/fwss-modular-dispatch \
   --require-dispatch \
   --output /absolute/path/to/new-dispatch-run
 ```
