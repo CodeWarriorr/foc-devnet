@@ -41,4 +41,11 @@ else
   skip "dependency resolver tests (python3)"
 fi
 
+if command -v node &>/dev/null; then
+  node --test scenarios/synapse-e2e/lifecycle-assertions.test.ts &&
+    pass "scenario assertion tests" || fail "scenario assertion tests"
+else
+  skip "scenario assertion tests (node)"
+fi
+
 [[ $FAIL -eq 0 ]] && printf "\033[32m✓ All checks passed.\033[0m\n" || { printf "\033[31m✗ Linting failed.\033[0m\n"; exit 1; }
