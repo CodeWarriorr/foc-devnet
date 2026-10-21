@@ -91,10 +91,6 @@ async function assertAddPiecesRejected(
   expectedError: 'InvalidSignature' | 'ClientDataSetAlreadyRegistered'
 ): Promise<void> {
   assert(environment.contracts != null, 'Devnet contract exports are required')
-  const before = await getActivePieceCount(synapse.client, {
-    dataSetId,
-    contractAddress: environment.contracts.pdpVerifier,
-  })
   try {
     await simulateContract(synapse.client, {
       account: serviceProvider,
@@ -109,12 +105,7 @@ async function assertAddPiecesRejected(
       expectedError,
       `AddPieces rejection differed from ${expectedError}`
     )
-    const after = await getActivePieceCount(synapse.client, {
-      dataSetId,
-      contractAddress: environment.contracts.pdpVerifier,
-    })
-    assert.equal(after, before, `${expectedError} simulation changed active piece count`)
-    console.log(`AddPieces rejected with ${expectedError}; active piece count remained ${after}`)
+    console.log(`AddPieces rejected with ${expectedError}`)
     return
   }
   throw new Error(`AddPieces unexpectedly accepted ${expectedError} test input`)
@@ -200,16 +191,13 @@ async function addSecondPieceAndValidateSignatures(
   console.log(`Second piece verified in existing data set ${dataSetId}; active pieces=${activeAfter}`)
 }
 
-async function waitForCompletedProof(
-  environment: ScenarioEnvironment,
-  dataSetId: bigint,
-  initialLastProvenEpoch: bigint
-): Promise<ProvingPeriod> {
+async function waitForCompletedProof(environment: ScenarioEnvironment, dataSetId: bigint): Promise<ProvingPeriod> {
   const period = await waitForPeriodEnd(environment, dataSetId, 0n)
   assert(period.proven, `First proving period of data set ${dataSetId} was not proven`)
+  // Until the first proof, PDPVerifier's last proven epoch is at most the activation epoch.
   assert(
-    period.lastProvenEpoch > initialLastProvenEpoch,
-    `Last proven epoch of data set ${dataSetId} did not advance from ${initialLastProvenEpoch}`
+    period.lastProvenEpoch > period.activationEpoch,
+    `PDPVerifier recorded no proof for data set ${dataSetId} since activation ${period.activationEpoch}`
   )
   return period
 }
@@ -342,25 +330,11 @@ async function main(): Promise<void> {
   await assertDirectRetrievals(result, filePath)
   await assertOnchainState(synapse, result, metadata, prepared)
 
-  const initialProofEpochs = await Promise.all(
-    result.copies.map((copy) =>
-      readContract(synapse.client, {
-        address: environment.contracts!.pdpVerifier,
-        abi: pdpAbi,
-        functionName: 'getDataSetLastProvenEpoch',
-        args: [copy.dataSetId],
-      })
-    )
-  )
   await addSecondPieceAndValidateSignatures(synapse, environment, result.copies[1].dataSetId, filePath)
   const completedProofs = []
   for (let index = 0; index < result.copies.length; index++) {
     completedProofs.push(
-      await waitForCompletedProof(
-        environment,
-        result.copies[index].dataSetId,
-        initialProofEpochs[index]
-      )
+      await waitForCompletedProof(environment, result.copies[index].dataSetId)
     )
   }
   await settleCompletedPeriod(

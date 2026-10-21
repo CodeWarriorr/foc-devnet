@@ -41,17 +41,18 @@ function delay(milliseconds: number): Promise<void> {
 async function waitForTransaction(synapse: ScenarioSynapse, hash: Hash, label: string): Promise<void> {
   let lastError: unknown
   for (let attempt = 0; attempt < 90; attempt++) {
+    let receipt = null
     try {
-      const receipt = await synapse.client.request({
+      receipt = await synapse.client.request({
         method: 'eth_getTransactionReceipt',
         params: [hash],
       })
-      if (receipt != null) {
-        assertReceiptSucceeded(receipt, label)
-        return
-      }
     } catch (error) {
       lastError = error
+    }
+    if (receipt != null) {
+      assertReceiptSucceeded(receipt, label)
+      return
     }
     await delay(1000)
   }
