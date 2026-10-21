@@ -31,6 +31,9 @@ pub struct DevnetInfoV2 {
     pub startup_duration: String,
     /// User accounts available for testing
     pub users: Vec<UserInfo>,
+    /// Account that deployed and owns the FOC contracts, and is the FilBeam
+    /// controller. Scenarios use it for owner-only operations such as upgrades.
+    pub foc_deployer: UserInfo,
     /// Deployed contract addresses
     pub contracts: ContractsInfo,
     /// Lotus node information

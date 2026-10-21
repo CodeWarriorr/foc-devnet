@@ -47,6 +47,10 @@ const UserInfo = z.object({
   private_key_hex: z.string().startsWith("0x"),
 });
 
+const DeployerInfo = UserInfo.extend({
+  name: z.literal("DEPLOYER_FOC"),
+});
+
 const LotusInfo = z.object({
   host_rpc_url: z.string().url(),
   container_id: z.string().min(1),
@@ -64,6 +68,7 @@ const DevnetInfoV2 = z.object({
   start_time: z.string(),
   startup_duration: z.string().min(1),
   users: z.array(UserInfo).min(1),
+  foc_deployer: DeployerInfo,
   contracts: ContractsInfo,
   lotus: LotusInfo,
   lotus_miner: LotusMinerInfo,

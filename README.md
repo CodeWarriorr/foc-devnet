@@ -112,7 +112,7 @@ filecoin-pin add <file> --network devnet
 python3 scenarios/test_synapse_e2e.py
 ```
 
-All connection details (contract addresses, user keys, SP endpoints) are exported to `devnet-info.json`:
+All connection details (contract addresses, user keys, the FOC deployer key, SP endpoints) are exported to `devnet-info.json`:
 
 ```bash
 cat ~/.foc-devnet/state/latest/devnet-info.json
