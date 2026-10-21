@@ -140,7 +140,7 @@ def run_side(args, side, report, common, output):
                 + "\n"
             )
         # Covers the sum of the per-scenario timeouts in FWSS_REGRESSION_ORDER.
-        execute("scenarios", scenario_args, timeout=10800)
+        execute("scenarios", scenario_args, timeout=14400)
         record["status"] = "PASS"
     except (
         OSError,
@@ -239,7 +239,7 @@ def main():
         help="Local filecoin-services repository; only committed contents are tested",
     )
     parser.add_argument("--baseline", default="v1.4.0")
-    parser.add_argument("--candidate", default="refactor/fwss-modular-dispatch")
+    parser.add_argument("--candidate", default="origin/main")
     parser.add_argument(
         "--output",
         type=Path,

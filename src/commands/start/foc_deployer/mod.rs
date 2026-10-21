@@ -124,7 +124,7 @@ pub fn deploy_foc_contracts(
         ("CHAIN", LOCAL_NETWORK_CHAIN_ID.to_string()),
         ("DEPLOYER_ADDRESS", params.deployer_eth_addr.to_string()),
         // The upstream default is FilBeam's mainnet key; the deployer lets devnet
-        // scenarios settle CDN rails.
+        // scenarios settle and terminate CDN rails.
         (
             "FILBEAM_CONTROLLER_ADDRESS",
             params.deployer_eth_addr.to_string(),

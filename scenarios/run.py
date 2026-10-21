@@ -44,6 +44,7 @@ FWSS_REGRESSION_ORDER = [
     ("test_basic_balances", 10),
     ("test_fwss_lifecycle", 1800),
     *ORDER[2:],
+    ("test_fwss_cdn", 2400),
     # Pauses one provider's Curio, so it runs after the scenarios that use it.
     ("test_fwss_proving", 4200),
 ]
