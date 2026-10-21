@@ -50,6 +50,7 @@ pub fn verify_mock_usdfc(
                 "docker",
                 &[
                     "run",
+                    "--rm",
                     "--name",
                     &container_name,
                     "-u",

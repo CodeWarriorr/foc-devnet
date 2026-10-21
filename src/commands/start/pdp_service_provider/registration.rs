@@ -263,6 +263,7 @@ fn query_provider_id(
 
     let args: Vec<String> = vec![
         "run".to_string(),
+        "--rm".to_string(),
         "--name".to_string(),
         container_name,
         "-u".to_string(),
@@ -280,21 +281,30 @@ fn query_provider_id(
     ];
 
     let key = format!("pdp_query_provider_id_{}", pdp_sp_eth_address);
-    let output = run_and_log_command_strings("docker", &args, context, &key)?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to query provider ID: {}", stderr).into());
-    }
+    // Lotus rejects calls for a few epochs around a network upgrade; registration can land there.
+    retry_with_fixed_delay(
+        || {
+            let output = run_and_log_command_strings("docker", &args, context, &key)?;
 
-    let result = String::from_utf8_lossy(&output.stdout);
-    let provider_id: u64 = result.trim().parse().unwrap_or(0);
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("Failed to query provider ID: {}", stderr).into());
+            }
 
-    if provider_id == 0 {
-        return Err("Provider ID is 0, registration may have failed".into());
-    }
+            let result = String::from_utf8_lossy(&output.stdout);
+            let provider_id: u64 = result.trim().parse().unwrap_or(0);
 
-    Ok(provider_id)
+            if provider_id == 0 {
+                return Err("Provider ID is 0, registration may have failed".into());
+            }
+
+            Ok(provider_id)
+        },
+        DEFAULT_MAX_RETRIES,
+        DEFAULT_RETRY_DELAY_SECS,
+        &format!("Provider ID query for {}", pdp_sp_eth_address),
+    )
 }
 
 /// Wait for transaction confirmation
@@ -323,6 +333,7 @@ pub fn verify_provider_count(
 
             let args: Vec<String> = vec![
                 "run".to_string(),
+                "--rm".to_string(),
                 "--name".to_string(),
                 container_name,
                 "-u".to_string(),
@@ -373,6 +384,7 @@ pub fn verify_provider_id_by_address(
 
             let args: Vec<String> = vec![
                 "run".to_string(),
+                "--rm".to_string(),
                 "--name".to_string(),
                 container_name,
                 "-u".to_string(),
@@ -426,6 +438,7 @@ pub fn verify_approved_provider(
             let container_name = format!("foc-{}-pdp-verify-approved-{}", run_id, provider_id);
             let args: Vec<String> = vec![
                 "run".to_string(),
+                "--rm".to_string(),
                 "--name".to_string(),
                 container_name,
                 "-u".to_string(),
