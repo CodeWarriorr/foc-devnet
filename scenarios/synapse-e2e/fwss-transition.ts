@@ -54,7 +54,7 @@ import {
   waitForReceipt,
   type ProvingPeriod,
 } from './fwss-chain.ts'
-import { calculateSettlementAmounts, findRevertErrorName } from './lifecycle-assertions.ts'
+import { assertReceiptSucceeded, calculateSettlementAmounts, findRevertErrorName } from './lifecycle-assertions.ts'
 import { createFreshContext } from './storage.ts'
 
 const fwssAbi = parseAbi([
@@ -133,7 +133,7 @@ type Checkpoint = {
   cdn: DataSetRecord & { cdnRailId: bigint; cacheMissRailId: bigint }
   sessionKey: { privateKey: Hex; address: Address }
   presigned: { pieceCid: string; extraData: Hex }
-  armed?: { removedPieceId: bigint; unprovenPieceCid: string; armedAtBlock: bigint }
+  armed?: { removedPieceId: bigint; armedAtBlock: bigint }
 }
 
 // JSON cannot hold bigint; mark them with an `n` suffix.
@@ -352,7 +352,8 @@ async function rawCall(synapse: ScenarioSynapse, to: Address, data: Hex, blockNu
       if (typeof data === 'string' && data.startsWith('0x')) return `revert:${data}`
       current = (current as { cause?: unknown }).cause
     }
-    return `revert:${error instanceof Error ? error.message.split('\n')[0] : String(error)}`
+    // No revert data: an RPC failure, which must not count as agreement.
+    throw error
   }
 }
 
@@ -408,9 +409,9 @@ const FUNDING_HEADROOM = parseUnits('5', 18)
 
 async function depositHeadroom(synapse: ScenarioSynapse): Promise<void> {
   const approval = await ERC20.approve(synapse.client, { amount: FUNDING_HEADROOM })
-  await waitForReceipt(synapse, approval, 'Headroom USDFC approval')
+  assertReceiptSucceeded(await waitForReceipt(synapse, approval, 'Headroom USDFC approval'), 'Headroom USDFC approval')
   const hash = await deposit(synapse.client, { amount: FUNDING_HEADROOM })
-  await waitForReceipt(synapse, hash, 'Headroom deposit')
+  assertReceiptSucceeded(await waitForReceipt(synapse, hash, 'Headroom deposit'), 'Headroom deposit')
 }
 
 async function prepare(environment: ScenarioEnvironment, checkpointPath: string, filePath: string): Promise<void> {
@@ -450,7 +451,7 @@ async function prepare(environment: ScenarioEnvironment, checkpointPath: string,
     permissions: [AddPiecesPermission],
     expiresAt: BigInt(Math.floor(Date.now() / 1000) + 86_400),
   })
-  await waitForReceipt(synapse, loginHash, 'Session key login')
+  assertReceiptSucceeded(await waitForReceipt(synapse, loginHash, 'Session key login'), 'Session key login')
   console.log(`Session key ${sessionAddress} registered: ${loginHash}`)
 
   // A signature made under v1.4.0, submitted only after the transition.
@@ -536,12 +537,11 @@ async function arm(environment: ScenarioEnvironment, checkpointPath: string, fil
   })
   const removedPieceId = checkpoint.changing.pieceIds[1]
   const removal = await context.deletePiece({ piece: removedPieceId })
-  await waitForReceipt(synapse, removal, 'Piece removal scheduling')
+  assertReceiptSucceeded(await waitForReceipt(synapse, removal, 'Piece removal scheduling'), 'Piece removal scheduling')
   const scheduled = await context.getScheduledRemovals()
   assert.deepEqual([...scheduled], [removedPieceId], 'Piece removal was not scheduled')
   checkpoint.armed = {
     removedPieceId,
-    unprovenPieceCid: unproven.pieceCid.toString(),
     armedAtBlock: await getBlockNumber(synapse.client),
   }
   saveCheckpoint(checkpointPath, checkpoint)
@@ -574,7 +574,8 @@ async function proceed(environment: ScenarioEnvironment, checkpointPath: string,
   const mismatches = Object.keys(throughProxy).filter((k) => throughProxy[k] !== throughStateView[k])
   assert.deepEqual(mismatches, [], `Proxy and v1.4.0 StateView disagree at block ${block}`)
   const reverted = Object.keys(throughProxy).filter((k) => throughProxy[k].startsWith('revert:'))
-  console.log(`Read parity: ${calls.length} getters agree through the proxy and the v1.4.0 StateView; reverting on both: ${reverted.join(' ') || 'none'}`)
+  assert.deepEqual(reverted, [], 'Getters revert through both the proxy and the v1.4.0 StateView')
+  console.log(`Read parity: ${calls.length} getters agree through the proxy and the v1.4.0 StateView`)
   // Only the transition and Curio's proving share its block, so FWSS state must read the same on
   // both sides of it.
   const staticCalls = calls.filter(([fn]) => STATIC_VIEWS.has(fn))

@@ -20,10 +20,13 @@ UPGRADE_DELAY_EPOCHS="${UPGRADE_DELAY_EPOCHS:-40}"
 mkdir -p "$EVIDENCE_DIR"
 EVIDENCE_DIR="$(cd "$EVIDENCE_DIR" && pwd)"
 WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
 cd "$SERVICES_DIR"
 
 step() { printf '\n=== %s\n' "$*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
+# A rejection counts only with the expected reason; an RPC or build error fails too.
+expect_rejection() { grep -q -- "$2" "$1" || { cat "$1" >&2; fail "$3"; }; }
 evidence() { printf '%s\n' "$@" >> "$EVIDENCE_DIR/rollout-evidence.md"; }
 
 # DEVNET: the checklist installs josuke and evm into the operator's PATH. Install
@@ -86,6 +89,7 @@ broadcast_script() {
     return 0
   fi
   evidence "As in the checklist (no --skip-simulation): **failed**, see \`$label-checklist.log\`" ""
+  echo "CHECKLIST_DEVIATION=$label needed --skip-simulation"
   [ -f "$broadcast_json" ] && cp "$broadcast_json" "$EVIDENCE_DIR/$label-checklist.json" \
     && gas_table "$broadcast_json" >> "$EVIDENCE_DIR/rollout-evidence.md"
   if "$@" --broadcast --skip-simulation 2>&1 | tee "$EVIDENCE_DIR/$label-skip-simulation.log"; then
@@ -191,11 +195,14 @@ if FWSS_DISPATCHER_TRANSITION_ADDRESS="$TRANSITION" CALLDATA_ONLY=true \
   forge script script/FWSSDispatcherTransitionExecute.s.sol --rpc-url "$ETH_RPC_URL" > "$EVIDENCE_DIR/early-execute-script.log" 2>&1; then
   fail "the execute script accepted a plan before afterEpoch"
 fi
+expect_rejection "$EVIDENCE_DIR/early-execute-script.log" "not time yet" "the execute script failed for a reason other than the delay"
 # The proxy itself must refuse, not only the script.
 EARLY_UPGRADE=$(cast calldata 'upgradeToAndCall(address,bytes)' "$TRANSITION" "$(cast calldata 'migrate(address)' "$(cast call --rpc-url "$ETH_RPC_URL" "$TRANSITION" 'migration()(address)')")")
 if cast call --rpc-url "$ETH_RPC_URL" --from "$OWNER" "$FWSS_PROXY_ADDRESS" "$EARLY_UPGRADE" > "$EVIDENCE_DIR/early-execute-call.log" 2>&1; then
   fail "the proxy accepted upgradeToAndCall before afterEpoch"
 fi
+# v1.4.0 checks afterEpoch with a bare require, so the revert has no data.
+expect_rejection "$EVIDENCE_DIR/early-execute-call.log" 'data: "0x"$' "upgradeToAndCall failed for a reason other than a bare revert"
 echo "Early execute rejected by the script and by the proxy"
 
 step "A3: Review During the Delay"
@@ -263,9 +270,15 @@ step "Recovery is closed after a completed transition"
 if cast call --rpc-url "$ETH_RPC_URL" --from "$OWNER" "$FWSS_PROXY_ADDRESS" 'abortTransition()' > "$EVIDENCE_DIR/abort-after.log" 2>&1; then
   fail "abortTransition succeeded after a completed transition"
 fi
+# FunctionNotFound(abortTransition()): the dispatcher no longer routes it.
+expect_rejection "$EVIDENCE_DIR/abort-after.log" "0x5416eb98aeccc0ad" "abortTransition failed for a reason other than a missing route"
 STRANGER=$(cast wallet address --private-key 0x0000000000000000000000000000000000000000000000000000000000000001)
 if cast call --rpc-url "$ETH_RPC_URL" --from "$STRANGER" "$FWSS_PROXY_ADDRESS" \
   'announceMigration(address,uint96)' "$PINNED_MIGRATION" 1 > "$EVIDENCE_DIR/stranger-announce.log" 2>&1; then
   fail "a non-owner could announce a migration"
 fi
+expect_rejection "$EVIDENCE_DIR/stranger-announce.log" "0x118cdaa7" "announceMigration rejected the stranger for a reason other than ownership"
+cast call --rpc-url "$ETH_RPC_URL" --from "$OWNER" "$FWSS_PROXY_ADDRESS" \
+  'announceMigration(address,uint96)' "$PINNED_MIGRATION" 1 > "$EVIDENCE_DIR/owner-announce.log" 2>&1 \
+  || { cat "$EVIDENCE_DIR/owner-announce.log" >&2; fail "the owner cannot announce a migration"; }
 echo "TRANSITION_OK monolith=$MONOLITH dispatcher=$DISPATCHER transition=$TRANSITION migration=$PINNED_MIGRATION"
