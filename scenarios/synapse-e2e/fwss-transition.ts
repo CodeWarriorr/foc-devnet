@@ -8,12 +8,9 @@
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import * as ERC20 from '@filoz/synapse-core/erc20'
-import { deposit, getRail } from '@filoz/synapse-core/pay'
-import { getActivePieceCount } from '@filoz/synapse-core/pdp-verifier'
+import { getRail } from '@filoz/synapse-core/pay'
 import * as Piece from '@filoz/synapse-core/piece'
 import { AddPiecesPermission, fromSecp256k1, login } from '@filoz/synapse-core/session-key'
-import { getPdpDataSet } from '@filoz/synapse-core/warm-storage'
 import { Synapse } from '@filoz/synapse-sdk'
 import {
   call,
@@ -22,50 +19,45 @@ import {
   getLogs,
   getTransactionReceipt,
   readContract,
-  simulateContract,
 } from 'viem/actions'
 import {
   createPublicClient,
-  createWalletClient,
+  decodeAbiParameters,
   encodeFunctionData,
   http,
   parseAbi,
   parseAbiItem,
-  parseEventLogs,
-  parseUnits,
-  toHex,
-  zeroAddress,
+  parseAbiParameters,
   type Abi,
   type Address,
   type Hex,
 } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { createSynapse, prepareAccount, readAccountState, type ScenarioSynapse } from './account.ts'
-import { freshMetadata, resolveEnvironment, type ScenarioEnvironment } from './environment.ts'
+import { createSynapse, prepareAccount, type ScenarioSynapse } from './account.ts'
+import { resolveEnvironment, type ScenarioEnvironment } from './environment.ts'
 import {
   contractsOf,
+  assertAddRejected,
+  createDataSet,
+  dataSetRecord,
   delay,
+  depositHeadroom,
+  expectedProvenGross,
   expectedStorageRate,
-  pdpAbi,
-  send,
+  settleCdnExactly,
   settleExactly,
+  terminateAsPayer,
+  terminateCdnService,
+  variant,
+  waitForCurrentPeriodEnd,
   waitForNextChallenge,
   waitForPeriodEnd,
   waitForReceipt,
   type ProvingPeriod,
 } from './fwss-chain.ts'
-import { assertReceiptSucceeded, calculateSettlementAmounts, findRevertErrorName } from './lifecycle-assertions.ts'
-import { createFreshContext } from './storage.ts'
+import { assertReceiptSucceeded } from './lifecycle-assertions.ts'
 
-const fwssAbi = parseAbi([
-  'function viewContractAddress() view returns (address)',
-  'function settleFilBeamPaymentRails(uint256 dataSetId, uint256 cdnAmount, uint256 cacheMissAmount)',
-])
-
-const railAbi = parseAbi([
-  'function getRail(uint256 railId) view returns ((address token, address from, address to, address operator, address validator, uint256 paymentRate, uint256 lockupPeriod, uint256 lockupFixed, uint256 settledUpTo, uint256 endEpoch, uint256 commissionRateBps, address serviceFeeRecipient))',
-  'function accounts(address token, address owner) view returns (uint256 funds, uint256 lockupCurrent, uint256 lockupRate, uint256 lockupLastSettledAt)',
-])
+const fwssAbi = parseAbi(['function viewContractAddress() view returns (address)'])
 
 const nextProvingPeriodEvent = parseAbiItem(
   'event NextProvingPeriod(uint256 indexed setId, uint256 challengeEpoch, uint256 leafCount)'
@@ -133,6 +125,8 @@ type Checkpoint = {
   cdn: DataSetRecord & { cdnRailId: bigint; cacheMissRailId: bigint }
   sessionKey: { privateKey: Hex; address: Address }
   presigned: { pieceCid: string; extraData: Hex }
+  consumed: { pieceCid: string; extraData: Hex; nonce: bigint }
+  terminated: DataSetRecord & { endEpoch: bigint }
   armed?: { removedPieceId: bigint; armedAtBlock: bigint }
 }
 
@@ -147,10 +141,7 @@ function loadCheckpoint(path: string): Checkpoint {
   )
 }
 
-function devnetInfo(): {
-  foc_deployer: { evm_addr: string; private_key_hex: string }
-  contracts: { fwss_service_proxy_addr: string }
-} {
+function devnetInfo(): { contracts: { fwss_service_proxy_addr: string } } {
   const path = process.env.DEVNET_INFO_PATH
   assert(path, 'DEVNET_INFO_PATH is required')
   return JSON.parse(readFileSync(path, 'utf8')).info
@@ -168,126 +159,23 @@ function requiredBigInt(name: string): bigint {
   return BigInt(value)
 }
 
-async function activePieces(synapse: ScenarioSynapse, environment: ScenarioEnvironment, dataSetId: bigint) {
-  return getActivePieceCount(synapse.client, { dataSetId, contractAddress: contractsOf(environment).pdpVerifier })
-}
-
-async function dataSetRecord(synapse: ScenarioSynapse, environment: ScenarioEnvironment, dataSetId: bigint) {
-  const dataSet = await getPdpDataSet(synapse.client, {
-    dataSetId,
-    contractAddress: contractsOf(environment).fwssStateView,
-  })
-  assert(dataSet != null, `Data set ${dataSetId} is not readable`)
-  return dataSet
-}
-
-async function createDataSet(
-  synapse: ScenarioSynapse,
-  providerId: bigint,
-  pieces: Uint8Array[],
-  kind: string,
-  withCDN: boolean
-) {
-  const context = withCDN
-    ? await synapse.storage.createContext({ providerId, metadata: freshMetadata(kind), withCDN: true })
-    : await createFreshContext(synapse, providerId, freshMetadata(kind))
-  const preparation = await synapse.storage.prepare({ context, pieceSizes: pieces.map((p) => BigInt(p.byteLength)) })
-  if (preparation.transaction != null) {
-    await preparation.transaction.execute({ onHash: (hash) => console.log(`${kind} funding submitted: ${hash}`) })
-  }
-  const stored = []
-  for (const bytes of pieces) stored.push(await context.store(bytes))
-  const committed = await context.commit({
-    pieces: stored.map((s) => ({ pieceCid: s.pieceCid })),
-    onSubmitted: (hash) => console.log(`${kind} commit submitted: ${hash}`),
-  })
-  assert.equal(committed.isNewDataSet, true, `${kind} did not create a new data set`)
-  assert.equal(committed.pieceIds.length, pieces.length, `${kind} did not confirm every piece`)
-  console.log(`${kind}: data set ${committed.dataSetId} on provider ${providerId}, pieces ${committed.pieceIds}`)
-  return { context, committed, stored }
-}
-
-function variant(bytes: Uint8Array, tag: number): Uint8Array {
-  const copy = Uint8Array.from(bytes)
-  copy[0] ^= tag
-  return copy
-}
-
-// ── FilBeam CDN rails ────────────────────────────────────────
-
-async function settleCdnExactly(
-  synapse: ScenarioSynapse,
-  environment: ScenarioEnvironment,
-  checkpoint: Checkpoint,
-  cdnAmount: bigint,
-  cacheMissAmount: bigint,
-  label: string
-): Promise<void> {
-  const contracts = contractsOf(environment)
-  const controller = privateKeyToAccount(devnetInfo().foc_deployer.private_key_hex as Hex)
-  const wallet = createWalletClient({ account: controller, chain: environment.chain, transport: http() })
-  const rails = await Promise.all(
-    [checkpoint.cdn.cdnRailId, checkpoint.cdn.cacheMissRailId].map((railId) =>
-      readContract(synapse.client, { address: contracts.filecoinPay, abi: railAbi, functionName: 'getRail', args: [railId] })
-    )
-  )
-  const balance = (owner: Address) =>
-    readContract(synapse.client, {
-      address: contracts.filecoinPay,
-      abi: railAbi,
-      functionName: 'accounts',
-      args: [rails[0].token, owner],
-    }).then(([funds]) => funds)
-  const [payerBefore, cdnPayeeBefore, cacheMissPayeeBefore] = await Promise.all([
-    readAccountState(synapse),
-    balance(rails[0].to),
-    balance(rails[1].to),
-  ])
-  const { request } = await simulateContract(wallet, {
-    address: checkpoint.proxy,
-    abi: fwssAbi,
-    functionName: 'settleFilBeamPaymentRails',
-    args: [checkpoint.cdn.dataSetId, cdnAmount, cacheMissAmount],
-  })
-  const hash = await wallet.writeContract(request)
-  const receipt = await waitForReceipt(synapse, hash, label)
-  assert.equal(receipt.status, 'success', `${label} reverted`)
-  const railsAfter = await Promise.all(
-    [checkpoint.cdn.cdnRailId, checkpoint.cdn.cacheMissRailId].map((railId) =>
-      readContract(synapse.client, { address: contracts.filecoinPay, abi: railAbi, functionName: 'getRail', args: [railId] })
-    )
-  )
-  const [payerAfter, cdnPayeeAfter, cacheMissPayeeAfter] = await Promise.all([
-    readAccountState(synapse),
-    balance(rails[0].to),
-    balance(rails[1].to),
-  ])
-  assert.equal(payerBefore.funds - payerAfter.funds, cdnAmount + cacheMissAmount, `${label}: payer debit differs`)
-  assert.equal(rails[0].lockupFixed - railsAfter[0].lockupFixed, cdnAmount, `${label}: CDN lockup not reduced by its payment`)
-  assert.equal(rails[1].lockupFixed - railsAfter[1].lockupFixed, cacheMissAmount, `${label}: cache-miss lockup not reduced by its payment`)
-  const cdnNet = calculateSettlementAmounts(cdnAmount, rails[0].commissionRateBps).netPayee
-  const cacheMissNet = calculateSettlementAmounts(cacheMissAmount, rails[1].commissionRateBps).netPayee
-  if (rails[0].to === rails[1].to) {
-    assert.equal(cdnPayeeAfter - cdnPayeeBefore, cdnNet + cacheMissNet, `${label}: CDN payee credit differs`)
-  } else {
-    assert.equal(cdnPayeeAfter - cdnPayeeBefore, cdnNet, `${label}: CDN payee credit differs`)
-    assert.equal(cacheMissPayeeAfter - cacheMissPayeeBefore, cacheMissNet, `${label}: cache-miss payee credit differs`)
-  }
-  console.log(`${label}: dataSet=${checkpoint.cdn.dataSetId} cdn=${cdnAmount} cacheMiss=${cacheMissAmount} tx=${hash}`)
-}
-
 // ── Read parity ──────────────────────────────────────────────
 
 /** Every v1.4.0 StateView getter, with arguments drawn from the prepared state. */
-function viewCalls(checkpoint: Checkpoint, presignedNonce: bigint): [string, readonly unknown[]][] {
-  const sets = [checkpoint.steady, checkpoint.changing, checkpoint.cdn]
+function viewCalls(checkpoint: Checkpoint): [string, readonly unknown[]][] {
+  const sets = [checkpoint.steady, checkpoint.changing, checkpoint.cdn, checkpoint.terminated]
   const ids = sets.map((s) => s.dataSetId)
   const providers = [...new Set(sets.map((s) => s.providerId))]
-  const rails = [checkpoint.steady.pdpRailId, checkpoint.cdn.cdnRailId, checkpoint.cdn.cacheMissRailId]
+  const rails = [
+    checkpoint.steady.pdpRailId,
+    checkpoint.cdn.cdnRailId,
+    checkpoint.cdn.cacheMissRailId,
+    checkpoint.terminated.pdpRailId,
+  ]
   const calls: [string, readonly unknown[]][] = [
     ['clientDataSets', [checkpoint.client, 0n, 10n]],
     ['clientDataSets', [checkpoint.client]],
-    ['clientNonces', [checkpoint.client, presignedNonce]],
+    ['clientNonces', [checkpoint.client, checkpoint.consumed.nonce]],
     ['filBeamControllerAddress', []],
     ['getApprovedProviders', [0n, 10n]],
     ['getApprovedProvidersLength', []],
@@ -403,17 +291,6 @@ async function provingGas(
 
 // ── Phases ───────────────────────────────────────────────────
 
-// Synapse deposits the exact shortfall, but rails from earlier scenarios keep consuming lockup until
-// the commit lands, which can leave the CDN lockup a few wei short.
-const FUNDING_HEADROOM = parseUnits('5', 18)
-
-async function depositHeadroom(synapse: ScenarioSynapse): Promise<void> {
-  const approval = await ERC20.approve(synapse.client, { amount: FUNDING_HEADROOM })
-  assertReceiptSucceeded(await waitForReceipt(synapse, approval, 'Headroom USDFC approval'), 'Headroom USDFC approval')
-  const hash = await deposit(synapse.client, { amount: FUNDING_HEADROOM })
-  assertReceiptSucceeded(await waitForReceipt(synapse, hash, 'Headroom deposit'), 'Headroom deposit')
-}
-
 async function prepare(environment: ScenarioEnvironment, checkpointPath: string, filePath: string): Promise<void> {
   const contracts = contractsOf(environment)
   const synapse = createSynapse(environment)
@@ -436,9 +313,11 @@ async function prepare(environment: ScenarioEnvironment, checkpointPath: string,
   )
   // C: FilBeam CDN rails.
   const cdn = await createDataSet(synapse, providerIds[0], [variant(source, 0x04)], 'transition-cdn', true)
+  // D: terminated under v1.4.0, so the dispatcher inherits a data set that is still paying out.
+  const terminated = await createDataSet(synapse, providerIds[1], [variant(source, 0x09)], 'transition-terminated', false)
 
-  const [steadyInfo, changingInfo, cdnInfo] = await Promise.all(
-    [steady, changing, cdn].map((d) => dataSetRecord(synapse, environment, d.committed.dataSetId))
+  const [steadyInfo, changingInfo, cdnInfo, terminatedInfo] = await Promise.all(
+    [steady, changing, cdn, terminated].map((d) => dataSetRecord(synapse, environment, d.committed.dataSetId))
   )
   assert(cdnInfo.cdnRailId > 0n && cdnInfo.cacheMissRailId > 0n, 'CDN data set has no FilBeam rails')
 
@@ -459,10 +338,22 @@ async function prepare(environment: ScenarioEnvironment, checkpointPath: string,
   const presignedStored = await changing.context.store(presignedBytes)
   const presignedExtraData = await changing.context.presignForCommit([{ pieceCid: presignedStored.pieceCid }])
 
+  // A signature consumed under v1.4.0, whose replay the dispatcher must still refuse.
+  const consumedStored = await changing.context.store(variant(source, 0x0a))
+  const consumedExtraData = await changing.context.presignForCommit([{ pieceCid: consumedStored.pieceCid }])
+  const consumedCommit = await changing.context.commit({
+    pieces: [{ pieceCid: consumedStored.pieceCid }],
+    extraData: consumedExtraData,
+    onSubmitted: (hash) => console.log(`Consumed-signature commit submitted: ${hash}`),
+  })
+  assert.equal(consumedCommit.pieceIds.length, 1, 'The signature to consume was not accepted under v1.4.0')
+  const [consumedNonce] = decodeAbiParameters(parseAbiParameters('uint256, string[][], string[][], bytes'), consumedExtraData)
+
   const first = await waitForProvenPeriod(environment, steady.committed.dataSetId, 0n)
-  for (const id of [changing.committed.dataSetId, cdn.committed.dataSetId]) {
+  for (const id of [changing.committed.dataSetId, cdn.committed.dataSetId, terminated.committed.dataSetId]) {
     await waitForProvenPeriod(environment, id, 0n)
   }
+  const terminatedEnd = await terminateAsPayer(synapse, environment, terminated.committed.dataSetId)
 
   const { expectedRate } = await expectedStorageRate(synapse, environment, steady.committed.dataSetId)
   const steadyRail = await getRail(synapse.client, { railId: steadyInfo.pdpRailId })
@@ -506,8 +397,15 @@ async function prepare(environment: ScenarioEnvironment, checkpointPath: string,
     },
     sessionKey: { privateKey: sessionPrivateKey, address: sessionAddress },
     presigned: { pieceCid: presignedStored.pieceCid.toString(), extraData: presignedExtraData },
+    consumed: { pieceCid: consumedStored.pieceCid.toString(), extraData: consumedExtraData, nonce: consumedNonce },
+    terminated: {
+      dataSetId: terminated.committed.dataSetId,
+      providerId: providerIds[1],
+      pdpRailId: terminatedInfo.pdpRailId,
+      endEpoch: terminatedEnd,
+    },
   }
-  await settleCdnExactly(synapse, environment, checkpoint, 1_000n, 2_000n, 'FilBeam settlement before the transition')
+  await settleCdnExactly(synapse, environment, checkpoint.cdn, 1_000n, 2_000n, 'FilBeam settlement before the transition')
 
   saveCheckpoint(checkpointPath, checkpoint)
   console.log(`=== PREPARED: v1.4.0 state recorded in ${checkpointPath} ===`)
@@ -565,8 +463,7 @@ async function proceed(environment: ScenarioEnvironment, checkpointPath: string,
   assert.equal(viewAddress.toLowerCase(), checkpoint.proxy.toLowerCase(), 'viewContractAddress() does not return the proxy')
 
   const block = await getBlockNumber(synapse.client)
-  const presignedNonce = 0n
-  const calls = viewCalls(checkpoint, presignedNonce)
+  const calls = viewCalls(checkpoint)
   const [throughProxy, throughStateView] = await Promise.all([
     readViews(synapse, checkpoint.proxy, calls, block),
     readViews(synapse, checkpoint.stateView, calls, block),
@@ -575,6 +472,11 @@ async function proceed(environment: ScenarioEnvironment, checkpointPath: string,
   assert.deepEqual(mismatches, [], `Proxy and v1.4.0 StateView disagree at block ${block}`)
   const reverted = Object.keys(throughProxy).filter((k) => throughProxy[k].startsWith('revert:'))
   assert.deepEqual(reverted, [], 'Getters revert through both the proxy and the v1.4.0 StateView')
+  assert.notEqual(
+    throughProxy[`clientNonces(${checkpoint.client},${checkpoint.consumed.nonce})`],
+    `ok:0x${'0'.repeat(64)}`,
+    'The nonce consumed under v1.4.0 reads as unused'
+  )
   console.log(`Read parity: ${calls.length} getters agree through the proxy and the v1.4.0 StateView`)
   // Only the transition and Curio's proving share its block, so FWSS state must read the same on
   // both sides of it.
@@ -670,22 +572,62 @@ async function proceed(environment: ScenarioEnvironment, checkpointPath: string,
     onSubmitted: (hash) => console.log(`Presigned commit submitted: ${hash}`),
   })
   assert.equal(presignedCommit.pieceIds.length, 1, 'The presigned v1.4.0 signature was not accepted')
-  const changingInfo = await dataSetRecord(synapse, environment, changing.dataSetId)
-  const countBefore = await activePieces(synapse, environment, changing.dataSetId)
-  try {
-    await simulateContract(synapse.client, {
-      account: changingInfo.serviceProvider,
-      address: contracts.pdpVerifier,
-      abi: pdpAbi,
-      functionName: 'addPieces',
-      args: [changing.dataSetId, zeroAddress, [{ data: toHex(presignedPiece.bytes) }], checkpoint.presigned.extraData],
-    })
-    throw new Error('Replay of the presigned v1.4.0 signature was accepted')
-  } catch (error) {
-    assert.equal(findRevertErrorName(error), 'ClientDataSetAlreadyRegistered', 'Replay was rejected for an unexpected reason')
-  }
-  assert.equal(await activePieces(synapse, environment, changing.dataSetId), countBefore, 'Rejected replay changed the data set')
+  await assertAddRejected(
+    synapse,
+    environment,
+    changing.dataSetId,
+    presignedPiece,
+    checkpoint.presigned.extraData,
+    'ClientDataSetAlreadyRegistered',
+    'Replay of the presigned v1.4.0 signature'
+  )
   console.log('Presigned v1.4.0 signature accepted once; replay rejected')
+  // A signature consumed under v1.4.0 stays consumed.
+  const consumedPiece = Piece.from(checkpoint.consumed.pieceCid)
+  await assertAddRejected(
+    synapse,
+    environment,
+    changing.dataSetId,
+    consumedPiece,
+    checkpoint.consumed.extraData,
+    'ClientDataSetAlreadyRegistered',
+    'Replay of a signature consumed under v1.4.0'
+  )
+  console.log(`Signature consumed under v1.4.0 (nonce ${checkpoint.consumed.nonce}) is still refused`)
+
+  // The data set terminated under v1.4.0 keeps its end, takes no pieces, and is paid for proven periods.
+  const terminated = checkpoint.terminated
+  const terminatedInfo = await dataSetRecord(synapse, environment, terminated.dataSetId)
+  assert.equal(terminatedInfo.pdpEndEpoch, terminated.endEpoch, 'The v1.4.0 termination end changed')
+  // FWSS checks termination before the nonce, so any signature shows the refusal.
+  await assertAddRejected(
+    synapse,
+    environment,
+    terminated.dataSetId,
+    consumedPiece,
+    checkpoint.consumed.extraData,
+    'DataSetPaymentAlreadyTerminated',
+    'Add to the data set terminated under v1.4.0'
+  )
+  const terminatedPeriod = await waitForCurrentPeriodEnd(synapse, environment, terminated.dataSetId)
+  const terminatedRail = await getRail(synapse.client, { railId: terminated.pdpRailId })
+  assert.equal(terminatedRail.endEpoch, terminated.endEpoch, 'The terminated rail end changed')
+  const { gross: terminatedGross } = await expectedProvenGross(
+    synapse,
+    environment,
+    terminated.dataSetId,
+    terminated.pdpRailId,
+    terminatedRail.settledUpTo,
+    terminatedPeriod.deadline
+  )
+  await settleExactly(
+    synapse,
+    environment,
+    terminated.pdpRailId,
+    terminatedPeriod.deadline,
+    terminatedGross,
+    'Terminated rail settlement across the transition'
+  )
 
   // The session key registered under v1.4.0 still authorizes adds.
   const sessionKey = fromSecp256k1({
@@ -712,12 +654,25 @@ async function proceed(environment: ScenarioEnvironment, checkpointPath: string,
   assert.equal(sessionCommit.pieceIds.length, 1, 'The v1.4.0 session key could not add a piece after the transition')
 
   // FilBeam settles the CDN rails created under v1.4.0.
-  await settleCdnExactly(synapse, environment, checkpoint, 3_000n, 4_000n, 'FilBeam settlement after the transition')
+  await settleCdnExactly(synapse, environment, checkpoint.cdn, 3_000n, 4_000n, 'FilBeam settlement after the transition')
+  // The dispatcher reads the withCDN metadata that v1.4.0 wrote.
+  await terminateCdnService(synapse, environment, checkpoint.cdn, 'CDN termination of a v1.4.0 data set')
 
-  // A new data set can be created through the dispatcher.
-  const fresh = await createDataSet(synapse, steady.providerId, [variant(source, 0x08)], 'transition-new', false)
+  // A new CDN data set can be created through the dispatcher.
+  const freshSource = variant(source, 0x08)
+  const fresh = await createDataSet(synapse, steady.providerId, [freshSource], 'transition-new', true)
   const freshBytes = await fresh.context.download({ pieceCid: fresh.stored[0].pieceCid })
-  assert.equal(freshBytes.byteLength, source.byteLength, 'New data set returned different bytes')
+  assert(Buffer.from(freshBytes).equals(freshSource), 'New data set returned different bytes')
+  const freshInfo = await dataSetRecord(synapse, environment, fresh.committed.dataSetId)
+  assert(freshInfo.cdnRailId > 0n && freshInfo.cacheMissRailId > 0n, 'New CDN data set has no FilBeam rails')
+  await settleCdnExactly(
+    synapse,
+    environment,
+    { dataSetId: fresh.committed.dataSetId, cdnRailId: freshInfo.cdnRailId, cacheMissRailId: freshInfo.cacheMissRailId },
+    100n,
+    200n,
+    'FilBeam settlement on a new data set'
+  )
 
   // Curio's gas for the same steady data set before and after: recorded, not asserted.
   const gas = await provingGas(
@@ -734,7 +689,7 @@ async function proceed(environment: ScenarioEnvironment, checkpointPath: string,
   if (gasPath) writeFileSync(gasPath, JSON.stringify(gas, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 2))
 
   console.log(
-    '=== SUCCESS: FWSS transition verified: read parity through proxy and v1.4.0 StateView, static state, old data, proving and exact settlement across the transition, pending removal and unproven piece, presigned signature and replay, session key, CDN settlement, new data set ==='
+    '=== SUCCESS: FWSS transition verified: read parity through proxy and v1.4.0 StateView, static state, old data, proving and exact settlement across the transition, pending removal and unproven piece, presigned and consumed signatures, terminated data set, session key, CDN settlement and termination, new CDN data set ==='
   )
 }
 
