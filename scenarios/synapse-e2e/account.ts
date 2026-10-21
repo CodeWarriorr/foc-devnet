@@ -83,10 +83,22 @@ export async function prepareAccount(synapse: ScenarioSynapse, pieceSize: bigint
       costs.needsFwssMaxApproval,
       'Preparation transaction approval differs from calculated requirement'
     )
-    const result = await transaction.execute({
-      onHash: (hash) => console.log(`Account funding submitted: ${hash}`),
-    })
-    console.log(`Account funding confirmed: ${result.hash}`)
+    let submitted: Hash | undefined
+    try {
+      const result = await transaction.execute({
+        onHash: (hash) => {
+          submitted = hash
+          console.log(`Account funding submitted: ${hash}`)
+        },
+      })
+      console.log(`Account funding confirmed: ${result.hash}`)
+    } catch (error) {
+      // The SDK receipt wait reads blocks by number and fails on devnet null rounds.
+      if (submitted == null) throw error
+      console.log(`Account funding wait failed, polling receipt: ${error instanceof Error ? error.message : error}`)
+      await waitForTransaction(synapse, submitted, 'Account funding')
+      console.log(`Account funding confirmed: ${submitted}`)
+    }
   }
 
   const ready = await synapse.storage.prepare(options)
