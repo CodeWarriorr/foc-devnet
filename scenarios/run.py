@@ -37,10 +37,15 @@ ORDER = [
     ("test_caching_subsystem", 200),
 ]
 
+# The lifecycle checks exact payer balances on USER_1, which the standard
+# scenarios also use, so it runs first, on an untouched account.
 FWSS_REGRESSION_ORDER = [
     ("test_containers", 5),
     ("test_basic_balances", 10),
     ("test_fwss_lifecycle", 1800),
+    *ORDER[2:],
+    # Pauses one provider's Curio, so it runs after the scenarios that use it.
+    ("test_fwss_proving", 4200),
 ]
 
 

@@ -1309,12 +1309,17 @@ docker run --rm --network host \
 
 ## Scenario Tests
 
+Scenario tests are Python scripts that validate devnet state after startup. They share a single running devnet and execute serially in a defined order. The runner lives in `scenarios/` and uses **only Python stdlib** — no `pip install` required.
+
 ### FWSS refactor regression
 
 The opt-in regression suite exercises upload/retrieval, real PDP proof progress,
 settlement of a completed proven period, repeat settlement, unauthorized
-administration, and payer termination. It uses the same business assertions for
-both revisions. A baseline failure is a failed run, not an expected failure.
+administration, and payer termination, then runs the standard scenarios.
+`test_fwss_proving` runs last: it pauses one provider's Curio for a full proving
+period, checks that settlement pays nothing for the missed period, and removes a
+piece. It uses the same business assertions for both revisions. A baseline
+failure is a failed run, not an expected failure.
 
 Build the CLI, then run the comparison on an **idle foc-devnet Docker daemon**:
 
@@ -1414,8 +1419,6 @@ populated legacy proxy, signature continuity/replay across an upgrade, or every
 pricing and fault boundary. Those require the actual integrated migration path
 and the corresponding contract tests; `comparison.json` explicitly records
 `migration: NOT_RUN`.
-
-Scenario tests are Python scripts that validate devnet state after startup. They share a single running devnet and execute serially in a defined order. The runner lives in `scenarios/` and uses **only Python stdlib** — no `pip install` required.
 
 ### Running scenarios
 

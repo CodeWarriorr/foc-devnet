@@ -1,37 +1,24 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { getRail } from '@filoz/synapse-core/pay'
-import { getActivePieceCount, getDataSetLeafCount } from '@filoz/synapse-core/pdp-verifier'
-import { getPdpDataSet, getPriceList } from '@filoz/synapse-core/warm-storage'
-import {
-  getBlockNumber,
-  getChainId,
-  getTransactionReceipt,
-  readContract,
-  simulateContract,
-  writeContract,
-} from 'viem/actions'
-import {
-  createPublicClient,
-  decodeAbiParameters,
-  encodeAbiParameters,
-  http,
-  parseAbi,
-  parseEventLogs,
-  toHex,
-  zeroAddress,
-  type Hash,
-  type Hex,
-} from 'viem'
-import { createSynapse, prepareAccount, readAccountState, type ScenarioSynapse } from './account.ts'
+import { getActivePieceCount } from '@filoz/synapse-core/pdp-verifier'
+import { getPdpDataSet } from '@filoz/synapse-core/warm-storage'
+import { getChainId, readContract, simulateContract } from 'viem/actions'
+import { decodeAbiParameters, encodeAbiParameters, parseEventLogs, toHex, zeroAddress, type Hex } from 'viem'
+import { createSynapse, prepareAccount, type ScenarioSynapse } from './account.ts'
 import { freshMetadata, resolveEnvironment, type ScenarioEnvironment } from './environment.ts'
 import {
-  assertReceiptSucceeded,
-  calculateExpectedStorageRate,
-  calculateSettlementAmounts,
-  classifyProofPollError,
-  findRevertErrorName,
-} from './lifecycle-assertions.ts'
+  expectedStorageRate,
+  fwssAbi,
+  payAbi,
+  pdpAbi,
+  send,
+  settleExactly,
+  stateViewAbi,
+  waitForPeriodEnd,
+  type ProvingPeriod,
+} from './fwss-chain.ts'
+import { findRevertErrorName } from './lifecycle-assertions.ts'
 import { assertOnchainState } from './onchain.ts'
 import {
   assertCompleteReplication,
@@ -41,78 +28,12 @@ import {
   uploadFile,
 } from './storage.ts'
 
-const fwssAbi = parseAbi([
-  'error OwnableUnauthorizedAccount(address account)',
-  'function configureProvingPeriod(uint64 maxProvingPeriod, uint256 challengeWindowSize)',
-  'function terminateService(uint256 dataSetId)',
-  'event ServiceTerminated(address indexed approver, uint256 indexed dataSetId, uint256 pdpRailId, uint256 cacheMissRailId, uint256 cdnRailId)',
-  'event PDPPaymentTerminated(uint256 indexed dataSetId, uint256 endEpoch, uint256 pdpRailId)',
-])
-
-const stateViewAbi = parseAbi([
-  'function getPDPConfig() view returns (uint64 maxProvingPeriod, uint256 challengeWindowSize, uint256 challengesPerProof, uint256 initChallengeWindowStart)',
-  'function getDataSet(uint256 dataSetId) view returns ((uint256 pdpRailId, uint256 cacheMissRailId, uint256 cdnRailId, address payer, address payee, address serviceProvider, uint256 commissionBps, uint256 clientDataSetId, uint256 pdpEndEpoch, uint256 providerId, uint96 pendingOneTimePayments, uint96 lifecycleReserveBalance, uint256 dataSetId) info)',
-  'function provenPeriods(uint256 dataSetId, uint256 periodId) view returns (bool)',
-  'function provingActivationEpoch(uint256 dataSetId) view returns (uint256)',
-  'function getDataSetSizeInBytes(uint256 leafCount) pure returns (uint256)',
-])
-
-const pdpAbi = parseAbi([
-  'error InvalidSignature(address expected, address actual)',
-  'error ClientDataSetAlreadyRegistered(uint256 clientDataSetId)',
-  'function addPieces(uint256 setId, address listenerAddr, (bytes data)[] pieceData, bytes extraData) payable returns (uint256)',
-  'function getDataSetLastProvenEpoch(uint256 setId) view returns (uint256)',
-])
-
 const addPiecesExtraDataParameters = [
   { type: 'uint256' },
   { type: 'string[][]' },
   { type: 'string[][]' },
   { type: 'bytes' },
 ] as const
-
-const payAbi = parseAbi([
-  'function accounts(address token, address owner) view returns (uint256 funds, uint256 lockupCurrent, uint256 lockupRate, uint256 lockupLastSettledAt)',
-  'function settleRail(uint256 railId, uint256 untilEpoch) returns (uint256 totalSettledAmount, uint256 totalNetPayeeAmount, uint256 totalOperatorCommission, uint256 totalNetworkFee, uint256 finalSettledEpoch, string note)',
-  'event RailSettled(uint256 indexed railId, uint256 totalSettledAmount, uint256 totalNetPayeeAmount, uint256 operatorCommission, uint256 networkFee, uint256 settledUpTo)',
-  'event RailTerminated(uint256 indexed railId, address indexed by, uint256 endEpoch)',
-])
-
-const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
-
-function proofTimeoutMilliseconds(): number {
-  const value = Number(process.env.FWSS_PROOF_TIMEOUT_MS ?? 900_000)
-  assert(Number.isSafeInteger(value) && value > 0, 'FWSS_PROOF_TIMEOUT_MS must be a positive integer')
-  return value
-}
-
-// viem's waitForTransactionReceipt also fetches blocks by number, which Lotus
-// rejects for null rounds. Poll the receipt directly and retry RPC errors.
-async function waitForReceipt(synapse: ScenarioSynapse, hash: Hash, label: string) {
-  let lastError: unknown
-  for (let attempt = 0; attempt < 120; attempt++) {
-    try {
-      return await getTransactionReceipt(synapse.client, { hash })
-    } catch (error) {
-      lastError = error
-    }
-    await delay(1_000)
-  }
-  const details = lastError instanceof Error ? `: ${lastError.message}` : ''
-  throw new Error(`${label} transaction ${hash} was not confirmed${details}`)
-}
-
-async function send(
-  synapse: ScenarioSynapse,
-  request: Parameters<typeof writeContract>[1],
-  label: string
-) {
-  const hash = (await writeContract(synapse.client, request)) as Hash
-  console.log(`${label} submitted: ${hash}`)
-  const receipt = await waitForReceipt(synapse, hash, label)
-  assertReceiptSucceeded(receipt, label)
-  return receipt
-}
 
 async function assertUnauthorizedAdmin(
   synapse: ScenarioSynapse,
@@ -279,82 +200,18 @@ async function addSecondPieceAndValidateSignatures(
   console.log(`Second piece verified in existing data set ${dataSetId}; active pieces=${activeAfter}`)
 }
 
-type CompletedProof = {
-  activationEpoch: bigint
-  deadline: bigint
-}
-
 async function waitForCompletedProof(
   environment: ScenarioEnvironment,
   dataSetId: bigint,
   initialLastProvenEpoch: bigint
-): Promise<CompletedProof> {
-  assert(environment.contracts != null, 'Devnet contract exports are required')
-  const proofClient = createPublicClient({
-    chain: environment.chain,
-    transport: http(),
-    ccipRead: false,
-  })
-  const started = Date.now()
-  let observedLastProven = initialLastProvenEpoch
-  let observedFirstPeriod = false
-  while (Date.now() - started < proofTimeoutMilliseconds()) {
-    let poll
-    try {
-      poll = await Promise.all([
-        readContract(proofClient, {
-          address: environment.contracts.fwssStateView,
-          abi: stateViewAbi,
-          functionName: 'getPDPConfig',
-        }),
-        readContract(proofClient, {
-          address: environment.contracts.pdpVerifier,
-          abi: pdpAbi,
-          functionName: 'getDataSetLastProvenEpoch',
-          args: [dataSetId],
-        }),
-        readContract(proofClient, {
-          address: environment.contracts.fwssStateView,
-          abi: stateViewAbi,
-          functionName: 'provingActivationEpoch',
-          args: [dataSetId],
-        }),
-        readContract(proofClient, {
-          address: environment.contracts.fwssStateView,
-          abi: stateViewAbi,
-          functionName: 'provenPeriods',
-          args: [dataSetId, 0n],
-        }),
-        getBlockNumber(proofClient),
-      ])
-    } catch (error) {
-      const stateFork = classifyProofPollError(error)
-      console.log(
-        `Proof polling crossed unavailable state at fork epoch ${stateFork.epoch}; retrying within the proof timeout`
-      )
-      await delay(5_000)
-      continue
-    }
-    const [[maxProvingPeriod], lastProvenEpoch, activationEpoch, firstPeriodProven, blockNumber] = poll
-    observedLastProven = lastProvenEpoch
-    observedFirstPeriod = firstPeriodProven
-    const deadline = activationEpoch + maxProvingPeriod
-    if (
-      activationEpoch > 0n &&
-      lastProvenEpoch > initialLastProvenEpoch &&
-      firstPeriodProven &&
-      blockNumber >= deadline
-    ) {
-      console.log(
-        `Completed proof observed: dataSet=${dataSetId} period=0 lastProven=${lastProvenEpoch} deadline=${deadline} head=${blockNumber}`
-      )
-      return { activationEpoch, deadline }
-    }
-    await delay(5_000)
-  }
-  throw new Error(
-    `Timed out waiting for proven first period for data set ${dataSetId}; last proven epoch advanced from ${initialLastProvenEpoch} to ${observedLastProven}; period0=${observedFirstPeriod}`
+): Promise<ProvingPeriod> {
+  const period = await waitForPeriodEnd(environment, dataSetId, 0n)
+  assert(period.proven, `First proving period of data set ${dataSetId} was not proven`)
+  assert(
+    period.lastProvenEpoch > initialLastProvenEpoch,
+    `Last proven epoch of data set ${dataSetId} did not advance from ${initialLastProvenEpoch}`
   )
+  return period
 }
 
 async function settleCompletedPeriod(
@@ -371,25 +228,8 @@ async function settleCompletedPeriod(
   })
   assert(dataSet != null, `Data set ${dataSetId} disappeared before settlement`)
   const railBefore = await getRail(synapse.client, { railId: dataSet.pdpRailId })
-  const [leafCount, priceList] = await Promise.all([
-    getDataSetLeafCount(synapse.client, {
-      dataSetId,
-      contractAddress: environment.contracts.pdpVerifier,
-    }),
-    getPriceList(synapse.client, { contractAddress: environment.contracts.fwssStateView }),
-  ])
-  const totalBytes = await readContract(synapse.client, {
-    address: environment.contracts.fwssStateView,
-    abi: stateViewAbi,
-    functionName: 'getDataSetSizeInBytes',
-    args: [leafCount],
-  })
-  const expectedRate = calculateExpectedStorageRate(
-    totalBytes,
-    priceList.rates.storagePerTibPerMonth,
-    priceList.rates.datasetFeePerMonth
-  )
-  assert.equal(railBefore.token.toLowerCase(), priceList.token.toLowerCase(), 'PDP rail uses the wrong payment token')
+  const { expectedRate, totalBytes, token } = await expectedStorageRate(synapse, environment, dataSetId)
+  assert.equal(railBefore.token.toLowerCase(), token.toLowerCase(), 'PDP rail uses the wrong payment token')
   assert.equal(railBefore.paymentRate, expectedRate, 'PDP rail rate differs from data set size and price list')
   assert(expectedRate > 0n, 'PDP rail payment rate must be positive')
   assert.equal(railBefore.endEpoch, 0n, 'PDP rail terminated before controlled settlement')
@@ -398,99 +238,12 @@ async function settleCompletedPeriod(
     `PDP rail was already settled beyond first-period activation ${activationEpoch}`
   )
   assert(targetEpoch > activationEpoch, 'First proving-period deadline must follow activation')
-  const expected = calculateSettlementAmounts(
-    expectedRate * (targetEpoch - activationEpoch),
-    railBefore.commissionRateBps
-  )
-  assert(expected.gross > 0n, 'Controlled settlement must transfer a non-zero exact amount')
+  const gross = expectedRate * (targetEpoch - activationEpoch)
+  assert(gross > 0n, 'Controlled settlement must transfer a non-zero exact amount')
 
-  const [payerBefore, payeeBefore] = await Promise.all([
-    readAccountState(synapse),
-    readContract(synapse.client, {
-      address: environment.contracts.filecoinPay,
-      abi: payAbi,
-      functionName: 'accounts',
-      args: [railBefore.token, railBefore.to],
-    }),
-  ])
-  const simulation = await simulateContract(synapse.client, {
-    account: synapse.client.account,
-    address: environment.contracts.filecoinPay,
-    abi: payAbi,
-    functionName: 'settleRail',
-    args: [dataSet.pdpRailId, targetEpoch],
-  })
-  assert.deepEqual(
-    simulation.result.slice(0, 5),
-    [expected.gross, expected.netPayee, expected.operatorCommission, expected.networkFee, targetEpoch],
-    'Settlement simulation differs from independent epoch, rate, and fee calculation'
-  )
-  const receipt = await send(synapse, simulation.request, 'PDP rail settlement')
-  const events = parseEventLogs({ abi: payAbi, logs: receipt.logs, eventName: 'RailSettled', strict: true })
-  assert.equal(events.length, 1, 'Settlement receipt must contain exactly one RailSettled event')
-  const event = events[0].args
-  assert.deepEqual(
-    [
-      event.railId,
-      event.totalSettledAmount,
-      event.totalNetPayeeAmount,
-      event.operatorCommission,
-      event.networkFee,
-      event.settledUpTo,
-    ],
-    [
-      dataSet.pdpRailId,
-      expected.gross,
-      expected.netPayee,
-      expected.operatorCommission,
-      expected.networkFee,
-      targetEpoch,
-    ],
-    'RailSettled event differs from exact expected settlement'
-  )
-  const [railAfter, payerAfter, payeeAfter] = await Promise.all([
-    getRail(synapse.client, { railId: dataSet.pdpRailId }),
-    readAccountState(synapse),
-    readContract(synapse.client, {
-      address: environment.contracts.filecoinPay,
-      abi: payAbi,
-      functionName: 'accounts',
-      args: [railBefore.token, railBefore.to],
-    }),
-  ])
-  assert.equal(railAfter.settledUpTo, targetEpoch, 'Rail cursor differs from settlement target')
-  assert.equal(payerBefore.funds - payerAfter.funds, expected.gross, 'Payer debit differs from gross settlement')
-  assert.equal(payeeAfter[0] - payeeBefore[0], expected.netPayee, 'Payee credit differs from net settlement')
-
-  const repeat = await simulateContract(synapse.client, {
-    account: synapse.client.account,
-    address: environment.contracts.filecoinPay,
-    abi: payAbi,
-    functionName: 'settleRail',
-    args: [dataSet.pdpRailId, targetEpoch],
-  })
-  assert.deepEqual(repeat.result.slice(0, 5), [0n, 0n, 0n, 0n, targetEpoch], 'Repeated settlement is not a zero-payment operation')
-  const repeatReceipt = await send(synapse, repeat.request, 'Repeated PDP rail settlement')
-  assert.equal(
-    parseEventLogs({ abi: payAbi, logs: repeatReceipt.logs, eventName: 'RailSettled', strict: false }).length,
-    0,
-    'Repeated no-op settlement unexpectedly emitted RailSettled'
-  )
-  const [railRepeated, payerRepeated, payeeRepeated] = await Promise.all([
-    getRail(synapse.client, { railId: dataSet.pdpRailId }),
-    readAccountState(synapse),
-    readContract(synapse.client, {
-      address: environment.contracts.filecoinPay,
-      abi: payAbi,
-      functionName: 'accounts',
-      args: [railBefore.token, railBefore.to],
-    }),
-  ])
-  assert.equal(railRepeated.settledUpTo, railAfter.settledUpTo, 'Repeated settlement moved the rail cursor')
-  assert.equal(payerRepeated.funds, payerAfter.funds, 'Repeated settlement debited the payer')
-  assert.equal(payeeRepeated[0], payeeAfter[0], 'Repeated settlement credited the payee')
+  await settleExactly(synapse, environment, dataSet.pdpRailId, targetEpoch, gross, 'PDP rail settlement')
   console.log(
-    `Exact settlement verified: rail=${dataSet.pdpRailId} rate=${expectedRate} bytes=${totalBytes} epochs=${targetEpoch - activationEpoch} gross=${expected.gross} net=${expected.netPayee}`
+    `Exact settlement verified: rail=${dataSet.pdpRailId} rate=${expectedRate} bytes=${totalBytes} epochs=${targetEpoch - activationEpoch}`
   )
 }
 
