@@ -4,17 +4,16 @@ import { getRail } from '@filoz/synapse-core/pay'
 import { getActivePieceCount } from '@filoz/synapse-core/pdp-verifier'
 import { getPdpDataSet } from '@filoz/synapse-core/warm-storage'
 import { getChainId, readContract, simulateContract } from 'viem/actions'
-import { decodeAbiParameters, encodeAbiParameters, parseEventLogs, toHex, zeroAddress, type Hex } from 'viem'
+import { decodeAbiParameters, encodeAbiParameters, toHex, zeroAddress, type Hex } from 'viem'
 import { createSynapse, prepareAccount, type ScenarioSynapse } from './account.ts'
 import { freshMetadata, resolveEnvironment, type ScenarioEnvironment } from './environment.ts'
 import {
   expectedStorageRate,
   fwssAbi,
-  payAbi,
   pdpAbi,
-  send,
   settleExactly,
   stateViewAbi,
+  terminateAsPayer,
   waitForPeriodEnd,
   type ProvingPeriod,
 } from './fwss-chain.ts'
@@ -233,72 +232,6 @@ async function settleCompletedPeriod(
   console.log(
     `Exact settlement verified: rail=${dataSet.pdpRailId} rate=${expectedRate} bytes=${totalBytes} epochs=${targetEpoch - activationEpoch}`
   )
-}
-
-async function terminateAsPayer(
-  synapse: ScenarioSynapse,
-  environment: ScenarioEnvironment,
-  dataSetId: bigint
-): Promise<void> {
-  assert(environment.contracts != null, 'Devnet contract exports are required')
-  const before = await getPdpDataSet(synapse.client, {
-    dataSetId,
-    contractAddress: environment.contracts.fwssStateView,
-  })
-  assert(before != null, `Data set ${dataSetId} disappeared before termination`)
-  const simulation = await simulateContract(synapse.client, {
-    account: synapse.client.account,
-    address: environment.chain.contracts.fwss.address,
-    abi: fwssAbi,
-    functionName: 'terminateService',
-    args: [dataSetId],
-  })
-  const receipt = await send(synapse, simulation.request, 'Payer service termination')
-  const terminatedEvents = parseEventLogs({
-    abi: fwssAbi,
-    logs: receipt.logs,
-    eventName: 'ServiceTerminated',
-    strict: false,
-  })
-  const paymentTerminatedEvents = parseEventLogs({
-    abi: fwssAbi,
-    logs: receipt.logs,
-    eventName: 'PDPPaymentTerminated',
-    strict: false,
-  })
-  assert.equal(terminatedEvents.length, 1, 'Termination receipt must contain one ServiceTerminated event')
-  assert.equal(paymentTerminatedEvents.length, 1, 'Termination receipt must contain one PDPPaymentTerminated event')
-  const terminated = terminatedEvents[0]
-  const paymentTerminated = paymentTerminatedEvents[0]
-  const approver = terminated.args.approver
-  assert(approver != null, 'ServiceTerminated event has no approver')
-  assert.equal(approver.toLowerCase(), synapse.client.account.address.toLowerCase())
-  assert.equal(terminated.args.dataSetId, dataSetId)
-  assert.equal(terminated.args.pdpRailId, before.pdpRailId)
-
-  const railEvents = parseEventLogs({ abi: payAbi, logs: receipt.logs, eventName: 'RailTerminated', strict: false })
-  assert.equal(railEvents.length, 1, 'Termination receipt must contain exactly one PDP RailTerminated event')
-  const [rail, info] = await Promise.all([
-    getRail(synapse.client, { railId: before.pdpRailId }),
-    readContract(synapse.client, {
-      address: environment.contracts.fwssStateView,
-      abi: stateViewAbi,
-      functionName: 'getDataSet',
-      args: [dataSetId],
-    }),
-  ])
-  const endEpoch = paymentTerminated.args.endEpoch
-  assert(endEpoch != null, 'PDPPaymentTerminated event has no end epoch')
-  assert(endEpoch > 0n, 'Termination produced a zero end epoch')
-  assert.equal(paymentTerminated.args.pdpRailId, before.pdpRailId)
-  assert.equal(railEvents[0].args.railId, before.pdpRailId)
-  const railTerminator = railEvents[0].args.by
-  assert(railTerminator != null, 'RailTerminated event has no terminator')
-  assert.equal(railTerminator.toLowerCase(), environment.chain.contracts.fwss.address.toLowerCase())
-  assert.equal(railEvents[0].args.endEpoch, endEpoch)
-  assert.equal(rail.endEpoch, endEpoch, 'Filecoin Pay rail end differs from termination event')
-  assert.equal(info.pdpEndEpoch, endEpoch, 'FWSS data set end differs from Filecoin Pay rail end')
-  console.log(`Payer termination verified: dataSet=${dataSetId} rail=${before.pdpRailId} endEpoch=${endEpoch}`)
 }
 
 async function main(): Promise<void> {

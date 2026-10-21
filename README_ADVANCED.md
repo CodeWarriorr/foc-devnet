@@ -962,7 +962,7 @@ Steps run sequentially by default, or in parallel when using the `--parallel` fl
 **FOC Deploy Step:**
    - Deploy FOC service contracts
    - Deploy PDPVerifier, ServiceProviderRegistry, etc.
-   - Set the FOC deployer as the FilBeam controller, so scenarios can settle CDN rails
+   - Set the FOC deployer as the FilBeam controller, so scenarios can settle and terminate CDN rails
    - Save all contract addresses
 
 **Database Step:**
@@ -1316,10 +1316,14 @@ Scenario tests are Python scripts that validate devnet state after startup. They
 The opt-in regression suite exercises upload/retrieval, real PDP proof progress,
 settlement of a completed proven period, repeat settlement, unauthorized
 administration, and payer termination, then runs the standard scenarios.
-`test_fwss_proving` runs last: it pauses one provider's Curio for a full proving
-period, checks that settlement pays nothing for the missed period, and removes a
-piece. It uses the same business assertions for both revisions. A baseline
-failure is a failed run, not an expected failure.
+`test_fwss_cdn` creates a FilBeam CDN data set, settles its CDN and PDP rails
+exactly, ends the CDN service as the FilBeam controller, terminates the data set
+as the payer, and checks that it takes no more pieces and is still paid for
+proven periods. `test_fwss_proving` runs last: it pauses one provider's Curio
+for a full proving period, checks that settlement pays nothing for the missed
+period, removes a piece, and settles exactly across the resulting rate change.
+It uses the same business assertions for both revisions. A baseline failure is
+a failed run, not an expected failure.
 
 Build the CLI, then run the comparison on an **idle foc-devnet Docker daemon**:
 
@@ -1328,7 +1332,7 @@ cargo build --locked
 python3 scripts/run-fwss-regression.py \
   --services-repo /absolute/path/to/filecoin-services \
   --baseline v1.4.0 \
-  --candidate origin/refactor/fwss-modular-dispatch \
+  --candidate origin/main \
   --output /absolute/path/to/new-regression-run
 ```
 
@@ -1349,7 +1353,7 @@ To require an actual dispatcher deployment, add `--require-dispatch`:
 python3 scripts/run-fwss-regression.py \
   --services-repo /absolute/path/to/filecoin-services \
   --baseline v1.4.0 \
-  --candidate origin/refactor/fwss-modular-dispatch \
+  --candidate origin/main \
   --require-dispatch \
   --output /absolute/path/to/new-dispatch-run
 ```
