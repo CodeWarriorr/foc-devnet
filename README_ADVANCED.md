@@ -1416,9 +1416,47 @@ revision.
 
 This is a **fresh-deployment** comparison. It does not prove migration of a
 populated legacy proxy, signature continuity/replay across an upgrade, or every
-pricing and fault boundary. Those require the actual integrated migration path
-and the corresponding contract tests; `comparison.json` explicitly records
-`migration: NOT_RUN`.
+pricing and fault boundary; `comparison.json` explicitly records
+`migration: NOT_RUN`. The transition rehearsal below covers the migration path.
+
+### FWSS v1.4.0 transition rehearsal (temporary)
+
+`scenarios/test_fwss_transition.py` upgrades a populated v1.4.0 proxy to the
+ERC-8167 dispatcher with the commands from the candidate's
+`service_contracts/UPGRADE-CHECKLIST.md` (path A). It is not in any scenario
+order. Run it on a devnet that deployed v1.4.0, for example one started with
+`--only baseline --keep-running`:
+
+```bash
+FOC_DEVNET_BASEDIR=/absolute/path/to/baseline/devnet \
+FWSS_TRANSITION_SERVICES_REPO=/absolute/path/to/filecoin-services \
+FWSS_TRANSITION_CANDIDATE=origin/refactor/fwss-modular-dispatch \
+FWSS_TRANSITION_EVIDENCE_DIR=/absolute/path/to/evidence \
+python3 scenarios/test_fwss_transition.py
+```
+
+It needs `node`, `forge`, `cast`, `jq`, `uv` and `make` on the host, and installs
+the candidate's pinned `evm` and `josuke` into a temporary directory. The
+scenario runs in three phases:
+
+1. **Prepare** on v1.4.0: datasets with proven periods, a settled storage rail,
+   settled FilBeam CDN rails, a session key, and a presigned add-pieces
+   signature. It snapshots the views through the v1.4.0 StateView.
+2. **Transition** with `scenarios/fwss-transition-upgrade.sh`. Before the
+   execute step it leaves an unproven piece and a scheduled removal in place.
+   Departures from the checklist are marked `# DEVNET:` in the script.
+3. **Continue** on the dispatcher: view parity between the proxy and the old
+   StateView, proofs and exact settlement across the upgrade, the scheduled
+   removal, signature replay protection, the session key, CDN settlement, and a
+   new dataset.
+
+The evidence directory keeps the upgrade log, the ledgers after A1 and at the
+end, the forge gas table (`rollout-evidence.md`), and proving gas before and
+after the transition (`proving-gas.json`).
+
+Remove `scenarios/test_fwss_transition.py`,
+`scenarios/fwss-transition-upgrade.sh`, `scenarios/synapse-e2e/fwss-transition.ts`
+and this section once Calibnet and Mainnet run the dispatcher.
 
 ### Running scenarios
 
