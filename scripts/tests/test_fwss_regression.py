@@ -88,7 +88,10 @@ class RegressionCommandTests(unittest.TestCase):
                 check=True,
             )
             binary = root / "foc-devnet"
-            binary.write_text("#!/bin/sh\nprintf 'broken setup\\n'\nexit 9\n")
+            binary.write_text(
+                '#!/bin/sh\nmkdir -p "$FOC_DEVNET_BASEDIR/code"\n'
+                "printf 'broken setup\\n'\nexit 9\n"
+            )
             binary.chmod(0o700)
             docker = root / "docker"
             docker.write_text("#!/bin/sh\nexit 0\n")
@@ -114,33 +117,55 @@ class RegressionCommandTests(unittest.TestCase):
                     }
                 )
             )
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "--services-repo",
-                    str(repo),
-                    "--baseline",
-                    "HEAD",
-                    "--candidate",
-                    "HEAD",
-                    "--output",
-                    str(root / "result"),
-                    "--binary",
-                    str(binary),
-                    "--dependencies",
-                    str(deps),
-                ],
-                env={**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]},
-                capture_output=True,
-                text=True,
-            )
+
+            def run(output, *extra):
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPT),
+                        "--services-repo",
+                        str(repo),
+                        "--baseline",
+                        "HEAD",
+                        "--candidate",
+                        "HEAD",
+                        "--output",
+                        str(root / output),
+                        "--binary",
+                        str(binary),
+                        "--dependencies",
+                        str(deps),
+                        "--min-free-gib",
+                        "0",
+                        *extra,
+                    ],
+                    env={
+                        **os.environ,
+                        "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                    },
+                    capture_output=True,
+                    text=True,
+                )
+
+            result = run("result")
             self.assertNotEqual(result.returncode, 0)
             report = json.loads((root / "result" / "comparison.json").read_text())
             self.assertEqual(report["status"], "FAIL")
             for side in ["baseline", "candidate"]:
                 self.assertEqual(report[side]["status"], "FAIL")
                 self.assertEqual(report[side]["failed_step"], "init")
+                self.assertFalse((root / "result" / side / "devnet").exists())
+                self.assertTrue((root / "result" / side / "init.log").exists())
+
+            run("kept", "--keep-devnet")
+            self.assertTrue((root / "kept/baseline/devnet/code").is_dir())
+
+            result = run("full", "--min-free-gib", "1e12")
+            self.assertNotEqual(result.returncode, 0)
+            report = json.loads((root / "full" / "comparison.json").read_text())
+            self.assertEqual(report["baseline"]["failed_step"], "disk-check")
+            self.assertIn("--min-free-gib", report["baseline"]["error"])
+            self.assertFalse((root / "full/baseline/init.log").exists())
 
     def test_prepare_resolves_configurable_baseline_and_candidate_without_a_network(
         self,
