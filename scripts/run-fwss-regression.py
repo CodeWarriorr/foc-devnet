@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -73,8 +74,16 @@ def run_side(args, side, report, common, output):
     record = report[side]
     record["status"] = "FAIL"
     started = False
-    step = "init"
+    step = "disk-check"
     try:
+        # One devnet needs 4-8 GB for checkouts, binaries and chain data, and the
+        # Docker disk image usually grows on the same volume.
+        free = shutil.disk_usage(directory).free
+        if free < args.min_free_gib * 2**30:
+            raise ValueError(
+                f"{free / 2**30:.1f} GiB free, need {args.min_free_gib} GiB (--min-free-gib)"
+            )
+        step = "init"
 
         def execute(name, argv, timeout=3600, attempts=1):
             # Builds and start fetch dependencies from the network and fail on
@@ -167,6 +176,14 @@ def run_side(args, side, report, common, output):
                     remove_owned_portainer(run_id)
             except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
                 record.update(status="FAIL", cleanup_error=str(error))
+        # A devnet that failed to stop may still be mounted by its containers.
+        if base.exists() and not (
+            args.keep_running or args.keep_devnet or "cleanup_error" in record
+        ):
+            try:
+                shutil.rmtree(base)
+            except OSError as error:
+                record.update(cleanup_error=f"devnet removal: {error}")
         write_summary(output, report)
 
 
@@ -277,6 +294,17 @@ def main():
         "--keep-running",
         action="store_true",
         help="Leave the DevNet running after the scenarios; requires --only",
+    )
+    parser.add_argument(
+        "--keep-devnet",
+        action="store_true",
+        help="Keep each stopped DevNet directory (4-8 GB) instead of deleting it",
+    )
+    parser.add_argument(
+        "--min-free-gib",
+        type=float,
+        default=25,
+        help="Refuse to start a revision with less free disk space (default 25)",
     )
     args = parser.parse_args()
     if args.keep_running and not args.only:

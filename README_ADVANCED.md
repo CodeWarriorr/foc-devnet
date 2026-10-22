@@ -1376,7 +1376,10 @@ needs network access and adds about a minute.
 
 The command initializes and builds two isolated environments serially, starts
 each, runs the regression suite, and stops it, including its own Portainer
-container. It does not delete run data. It
+container. After a clean stop it deletes that revision's `devnet/` directory
+(4-8 GB of checkouts, binaries and chain data) and keeps the reports and logs;
+pass `--keep-devnet` to keep it. Each revision refuses to start with less than
+25 GiB free (`--min-free-gib`). It
 refuses existing foc-devnet containers/networks because the existing `start` and
 `stop` commands sweep those resources across base directories. Do not launch
 another foc-devnet while a comparison is running. The check repeats before each
@@ -1406,7 +1409,8 @@ To get such a network from the comparison command, pass `--only baseline` or
 `--only candidate` with `--keep-running`. The command runs that revision only,
 leaves its devnet running, and writes the scenario environment it used to
 `<revision>/scenario-env.json`. When you are done, stop the devnet with
-`FOC_DEVNET_BASEDIR` from that file: `FOC_DEVNET_BASEDIR=... cargo run -- stop`.
+`FOC_DEVNET_BASEDIR` from that file: `FOC_DEVNET_BASEDIR=... cargo run -- stop`,
+then delete that directory, which the command keeps in this mode.
 
 To add a scenario, create `scenarios/test_fwss_<name>.py` and list it in
 `FWSS_REGRESSION_ORDER` in `scenarios/run.py`. The full comparison and the fast
