@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import * as ERC20 from '@filoz/synapse-core/erc20'
 import { deposit, getRail } from '@filoz/synapse-core/pay'
+import * as SP from '@filoz/synapse-core/sp'
 import { getDataSetLeafCount } from '@filoz/synapse-core/pdp-verifier'
 import { getPdpDataSet, getPriceList } from '@filoz/synapse-core/warm-storage'
 import {
@@ -563,6 +564,23 @@ export async function waitForNextChallenge(
   while ((await read()) === 0n) {
     assert(Date.now() - started < timeout, `Data set ${dataSetId} has no challenge scheduled after piece removal`)
     await delay(5_000)
+  }
+}
+
+/**
+ * Polls until the provider's Curio has recorded the data set. Curio inserts it from a chain watcher
+ * after the creation confirms, and rejects addPieces for a data set it has not recorded yet.
+ */
+export async function waitForProviderDataSet(serviceURL: string, dataSetId: bigint): Promise<void> {
+  const started = Date.now()
+  for (;;) {
+    try {
+      await SP.getDataSet({ serviceURL, dataSetId, retryCount: 0 })
+      return
+    } catch (error) {
+      assert(Date.now() - started < 120_000, `Provider at ${serviceURL} does not know data set ${dataSetId}: ${error}`)
+      await delay(3_000)
+    }
   }
 }
 
