@@ -15,6 +15,7 @@ import {
   stateViewAbi,
   terminateAsPayer,
   waitForPeriodEnd,
+  waitForProviderDataSet,
   type ProvingPeriod,
 } from './fwss-chain.ts'
 import { findRevertErrorName } from './lifecycle-assertions.ts'
@@ -125,6 +126,7 @@ async function addSecondPieceAndValidateSignatures(
   const context = await synapse.storage.createContext({ dataSetId })
   assert.equal(context.dataSetId, dataSetId, 'Existing-data-set context resolved a different data set')
   assert.equal(context.provider.id, dataSet.providerId, 'Existing-data-set context resolved a different provider')
+  await waitForProviderDataSet(context.provider.pdp.serviceURL, dataSetId)
 
   const secondBytes = new Uint8Array(await readFile(sourcePath))
   assert(secondBytes.length > 0, 'Second piece source is empty')
