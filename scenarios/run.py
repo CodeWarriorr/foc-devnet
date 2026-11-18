@@ -49,6 +49,15 @@ FWSS_REGRESSION_ORDER = [
     ("test_fwss_proving", 4200),
 ]
 
+# Opt-in: Pay v1 and v2 across the FWSS upgrade that adds Pay v2. It pays on
+# USER_3, so it does not disturb the exact balances the scenarios above check.
+FWSS_PAY_SCENARIO = ("test_fwss_pay_v2", 10800)
+FWSS_PAY_ONLY_ORDER = [
+    ("test_containers", 5),
+    ("test_basic_balances", 10),
+    FWSS_PAY_SCENARIO,
+]
+
 
 def _run_single_test(scenario_py_file, name, timeout_sec):
     """Run one scenario file as a subprocess, return a TestResult."""
@@ -140,11 +149,25 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fwss-regression", action="store_true")
     parser.add_argument("--require-dispatch", action="store_true")
+    parser.add_argument(
+        "--fwss-pay", action="store_true", help="Also run test_fwss_pay_v2"
+    )
+    parser.add_argument(
+        "--fwss-pay-only",
+        action="store_true",
+        help="Run only the container and balance checks and test_fwss_pay_v2",
+    )
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, lambda signum, _frame: sys.exit(128 + signum))
     if args.require_dispatch and not args.fwss_regression:
         parser.error("--require-dispatch requires --fwss-regression")
+    if args.fwss_pay_only and (args.fwss_regression or args.fwss_pay):
+        parser.error("--fwss-pay-only runs on its own")
     order = list(FWSS_REGRESSION_ORDER if args.fwss_regression else ORDER)
+    if args.fwss_pay_only:
+        order = list(FWSS_PAY_ONLY_ORDER)
+    elif args.fwss_pay:
+        order.append(FWSS_PAY_SCENARIO)
     if args.require_dispatch:
         order.insert(0, ("test_fwss_dispatch", 180))
     start = time.time()
