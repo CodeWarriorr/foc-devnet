@@ -1425,7 +1425,8 @@ revision.
 This is a **fresh-deployment** comparison. It does not prove migration of a
 populated legacy proxy, signature continuity/replay across an upgrade, or every
 pricing and fault boundary; `comparison.json` explicitly records
-`migration: NOT_RUN`.
+`migration: NOT_RUN`, unless `--fwss-pay` or `--fwss-pay-only` upgrades the
+baseline in place (see below).
 
 ### FWSS v1.4.0 transition rehearsal (temporary)
 
@@ -1466,6 +1467,79 @@ after the transition (`proving-gas.json`).
 Remove `scenarios/test_fwss_transition.py`,
 `scenarios/fwss-transition-upgrade.sh`, `scenarios/synapse-e2e/fwss-transition.ts`
 and this section once Calibnet and Mainnet run the dispatcher.
+
+### FWSS on Filecoin Pay v1 and v2
+
+`scenarios/test_fwss_pay_v2.py` checks every FWSS path that moves money through
+Filecoin Pay, on a release that uses Pay v1 only and on a candidate that adds
+FilecoinPayV2. Data sets that exist before the upgrade keep their Pay v1 rails;
+new data sets get Pay v2 rails. The scenario pays from `USER_3`, so it does not
+change the balances that the other scenarios check exactly.
+
+It chooses a mode from the devnet and the environment:
+
+| Mode | When | What it checks |
+|---|---|---|
+| `baseline` | Neither of the two below | Pay v1 only |
+| `upgrade` | `FWSS_PAY_SERVICES_REPO` and `FWSS_PAY_CANDIDATE` are set, and the devnet has no Pay v2 | Pay v1, then the in-place upgrade, then legacy v1 data sets and new v2 data sets |
+| `v2` | `devnet-info.json` exports `filecoin_pay_v2_addr` (a fresh candidate deployment) | New v2 data sets |
+
+Run the upgrade on a fresh baseline devnet and a fresh candidate devnet with the
+comparison command:
+
+```bash
+python3 scripts/run-fwss-regression.py \
+  --services-repo /absolute/path/to/filecoin-services \
+  --baseline v1.6.0 \
+  --candidate feat/filecoin-pay-v2 \
+  --fwss-pay-only \
+  --output /absolute/path/to/new-pay-run
+```
+
+`--fwss-pay-only` runs only this scenario after the container and balance
+checks; `--fwss-pay` runs it after the full FWSS regression suite. On the
+baseline side the scenario upgrades the devnet to the candidate in place; on the
+candidate side it runs in `v2` mode. Results, logs and ledgers are in
+`<revision>/pay-evidence/`. On a running devnet, run the scenario directly with
+the same variables, for example
+`FOC_DEVNET_BASEDIR=... FWSS_PAY_SERVICES_REPO=... FWSS_PAY_CANDIDATE=... python3 scenarios/test_fwss_pay_v2.py`.
+
+The `upgrade` mode runs in three phases:
+
+1. **Prepare** on the baseline, with Pay v1: operator approval and deposit, a
+   storage data set, a CDN data set, a data set to terminate later and one
+   terminated now, exact settlement of a proven period, FilBeam settlement and
+   top-up, a lifecycle reserve top-up, a refused payer termination of the PDP
+   rail, and a withdrawal.
+2. **Upgrade** with `scenarios/fwss-pay-upgrade.sh`, which follows Procedure B
+   (josuke migration) of the candidate's `tools/UPGRADE-CHECKLIST.md` and
+   deploys FilecoinPayV2 from the candidate. A fresh devnet has no josuke
+   record of its facets, so the script first records them with the baseline's
+   own josuke. Departures from the checklist are marked `# DEVNET:` in the
+   script, and missing `_filecoinPayV2Address` constructor arguments in the
+   candidate's `josuke.json` are reported as `CHECKLIST_DEVIATION`.
+3. **Continue**: the legacy data sets keep their Pay v1 rails and work through
+   adds, removals, exact settlement across the upgrade, reserve and CDN
+   top-ups, FilBeam settlement, CDN and payer termination, and withdrawal, and
+   Pay v1 opens no new rails. New data sets open only Pay v2 rails with the ids
+   FWSS derives, and go through the same steps on Pay v2. Creation for a payer
+   without v2 funds or without a v2 authorization of FWSS is refused.
+
+Each behavior is a named step with a result: `PASS`, `FAIL`, `BLOCKED` (a step
+it needs did not pass), `PENDING` or `FIXED`. While the Pay v2 integration is in
+progress, list the steps the candidate does not implement yet in
+`FWSS_PAY_PENDING` (comma-separated; `v2.cdn.*` matches a prefix). Their
+failures are `PENDING` and do not fail the run; a listed step that passes is
+`FIXED` and fails the run until you remove it from the list. For a candidate
+where only data set creation uses Pay v2:
+
+```bash
+export FWSS_PAY_PENDING='v2.add-pieces,v2.reserve.top-up,v2.cdn.settle,v2.cdn.top-up,v2.cdn.terminate,v2.terminate.payer,v2.pdp-rail.payer-cannot-bypass-fwss'
+```
+
+The scenario does not cover paths that need more time than a devnet run has:
+data set deletion after the 30-day lockup of a terminated v1 rail, and
+abandonment after 30 days without proofs.
 
 ### Running scenarios
 

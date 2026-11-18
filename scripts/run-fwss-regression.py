@@ -66,7 +66,15 @@ def run_side(args, side, report, common, output):
         "DEVNET_INFO": str(base / "state/latest/devnet-info.json"),
         "DEVNET_INFO_PATH": str(base / "state/latest/devnet-info.json"),
     }
-    for name in ("RPC_URL", "PRIVATE_KEY", "FWSS_DISPATCH_REPORT", "FWSS_BASELINE_ABI"):
+    for name in (
+        "RPC_URL",
+        "PRIVATE_KEY",
+        "FWSS_DISPATCH_REPORT",
+        "FWSS_BASELINE_ABI",
+        "FWSS_PAY_SERVICES_REPO",
+        "FWSS_PAY_CANDIDATE",
+        "FWSS_PAY_EVIDENCE_DIR",
+    ):
         env.pop(name, None)
     # scenario_environment needs resolved package details, so apply it after init
     # and checkout verification, before scenarios can make any transactions.
@@ -133,11 +141,23 @@ def run_side(args, side, report, common, output):
         execute("start", [binary, "start"], timeout=1800, attempts=args.attempts)
         env["FWSS_BASELINE_ABI"] = str(output / "baseline-abi.json")
         env["FWSS_DISPATCH_REPORT"] = str(directory / "dispatch.json")
-        scenario_args = [
-            sys.executable,
-            str(ROOT / "scenarios/run.py"),
-            "--fwss-regression",
-        ]
+        scenario_args = [sys.executable, str(ROOT / "scenarios/run.py")]
+        scenario_timeout = 14400
+        if args.fwss_pay_only:
+            scenario_args.append("--fwss-pay-only")
+            scenario_timeout = 11000
+        else:
+            scenario_args.append("--fwss-regression")
+            if args.fwss_pay:
+                scenario_args.append("--fwss-pay")
+                scenario_timeout += 10800
+        if args.fwss_pay or args.fwss_pay_only:
+            env["FWSS_PAY_EVIDENCE_DIR"] = str(directory / "pay-evidence")
+            # The baseline devnet is upgraded in place to the candidate; the
+            # candidate devnet deploys Pay v2 fresh, if the candidate has it.
+            if side == "baseline":
+                env["FWSS_PAY_SERVICES_REPO"] = report["services_repository"]
+                env["FWSS_PAY_CANDIDATE"] = report["candidate"]["commit"]
         if side == "candidate" and args.require_dispatch:
             scenario_args.append("--require-dispatch")
         if args.keep_running:
@@ -148,8 +168,8 @@ def run_side(args, side, report, common, output):
                 )
                 + "\n"
             )
-        # Covers the sum of the per-scenario timeouts in FWSS_REGRESSION_ORDER.
-        execute("scenarios", scenario_args, timeout=14400)
+        # Covers the sum of the per-scenario timeouts in the chosen order.
+        execute("scenarios", scenario_args, timeout=scenario_timeout)
         record["status"] = "PASS"
     except (
         OSError,
@@ -255,7 +275,7 @@ def main():
         required=True,
         help="Local filecoin-services repository; only committed contents are tested",
     )
-    parser.add_argument("--baseline", default="v1.4.0")
+    parser.add_argument("--baseline", default="v1.6.0")
     parser.add_argument("--candidate", default="origin/main")
     parser.add_argument(
         "--output",
@@ -286,6 +306,16 @@ def main():
         help="Fail unless candidate actually deploys ERC-8167 and preserves baseline public methods",
     )
     parser.add_argument(
+        "--fwss-pay",
+        action="store_true",
+        help="Also run test_fwss_pay_v2: the baseline is upgraded in place to the candidate",
+    )
+    parser.add_argument(
+        "--fwss-pay-only",
+        action="store_true",
+        help="Run test_fwss_pay_v2 instead of the FWSS regression scenarios",
+    )
+    parser.add_argument(
         "--only",
         choices=("baseline", "candidate"),
         help="Run one revision instead of the comparison",
@@ -309,12 +339,18 @@ def main():
     args = parser.parse_args()
     if args.keep_running and not args.only:
         parser.error("--keep-running requires --only")
+    if args.fwss_pay and args.fwss_pay_only:
+        parser.error("--fwss-pay and --fwss-pay-only are exclusive")
     sides = (args.only,) if args.only else ("baseline", "candidate")
     repo = args.services_repo.resolve()
     report = {
         "scope": "fresh-deployment FWSS lifecycle; not a populated-proxy migration",
         "require_candidate_dispatch": args.require_dispatch,
-        "migration": "NOT_RUN",
+        "migration": (
+            "baseline upgraded in place by test_fwss_pay_v2"
+            if args.fwss_pay or args.fwss_pay_only
+            else "NOT_RUN"
+        ),
         "services_repository": str(repo),
         "baseline": {"ref": args.baseline, "commit": revision(repo, args.baseline)},
         "candidate": {"ref": args.candidate, "commit": revision(repo, args.candidate)},
