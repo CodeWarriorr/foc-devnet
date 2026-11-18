@@ -6,6 +6,7 @@ import {
   calculateSettlementAmounts,
   classifyProofPollError,
   findRevertErrorName,
+  floorsMonthlyTotal,
 } from './lifecycle-assertions.ts'
 
 test('known Lotus state-fork read error is classified for polling retry', () => {
@@ -42,16 +43,15 @@ test('unknown proof-poll errors remain fatal', () => {
 })
 
 test('storage rate is derived from size and the on-chain price list', () => {
-  assert.equal(
-    calculateExpectedStorageRate(
-      1_099_511_627_776n,
-      2_500_000_000_000_000_000n,
-      120_000_000_000_000_000n
-    ),
-    30_324_074_074_073n
-  )
+  const args = [1_099_511_627_776n, 2_500_000_000_000_000_000n, 120_000_000_000_000_000n] as const
+  // 2.62e18 / 86400 = 30324074074074.07; the pre-1.6.0 split floors lose one more unit.
+  assert.equal(calculateExpectedStorageRate(...args, true), 30_324_074_074_074n)
+  assert.equal(calculateExpectedStorageRate(...args, false), 30_324_074_074_073n)
+  assert.equal(floorsMonthlyTotal('1.6.0'), true)
+  assert.equal(floorsMonthlyTotal('1.5.0'), false)
+  assert.equal(floorsMonthlyTotal('2.0.0'), true)
   assert.throws(
-    () => calculateExpectedStorageRate(0n, 1n, 1n),
+    () => calculateExpectedStorageRate(0n, 1n, 1n, true),
     /Data set size must be positive/
   )
 })

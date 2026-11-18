@@ -33,6 +33,7 @@ import { freshMetadata, type ScenarioEnvironment } from './environment.ts'
 import {
   assertReceiptSucceeded,
   calculateExpectedStorageRate,
+  floorsMonthlyTotal,
   calculateSettlementAmounts,
   classifyProofPollError,
   findRevertErrorName,
@@ -45,6 +46,7 @@ export const fwssAbi = parseAbi([
   'error OnlyFilBeamControllerAllowed(address expected, address actual)',
   'error FilBeamServiceNotConfigured(uint256 dataSetId)',
   'function terminateService(uint256 dataSetId)',
+  'function VERSION() view returns (string)',
   'function settleFilBeamPaymentRails(uint256 dataSetId, uint256 cdnAmount, uint256 cacheMissAmount)',
   'function terminateCDNService(uint256 dataSetId)',
   'event CDNServiceTerminated(address indexed caller, uint256 indexed dataSetId, uint256 cacheMissRailId, uint256 cdnRailId)',
@@ -567,9 +569,10 @@ export async function waitForNextChallenge(
 /** The PDP rail rate a data set's current size and the published price list require. */
 export async function expectedStorageRate(synapse: ScenarioSynapse, environment: ScenarioEnvironment, dataSetId: bigint) {
   const contracts = contractsOf(environment)
-  const [leafCount, priceList] = await Promise.all([
+  const [leafCount, priceList, version] = await Promise.all([
     getDataSetLeafCount(synapse.client, { dataSetId, contractAddress: contracts.pdpVerifier }),
     getPriceList(synapse.client, { contractAddress: contracts.fwssStateView }),
+    readContract(synapse.client, { address: environment.chain.contracts.fwss.address, abi: fwssAbi, functionName: 'VERSION' }),
   ])
   const totalBytes = await readContract(synapse.client, {
     address: contracts.fwssStateView,
@@ -580,7 +583,8 @@ export async function expectedStorageRate(synapse: ScenarioSynapse, environment:
   const expectedRate = calculateExpectedStorageRate(
     totalBytes,
     priceList.rates.storagePerTibPerMonth,
-    priceList.rates.datasetFeePerMonth
+    priceList.rates.datasetFeePerMonth,
+    floorsMonthlyTotal(version)
   )
   return { expectedRate, totalBytes, token: priceList.token }
 }

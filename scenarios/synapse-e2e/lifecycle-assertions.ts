@@ -44,14 +44,26 @@ export type SettlementAmounts = {
 const TIB_IN_BYTES = 1_099_511_627_776n
 const EPOCHS_PER_MONTH = 86_400n
 
+/** FWSS 1.6.0 (storage terms) floors the monthly total once; earlier releases floor both per-epoch parts. */
+export function floorsMonthlyTotal(fwssVersion: string): boolean {
+  const match = /^(\d+)\.(\d+)\./.exec(fwssVersion)
+  assert(match, `Unrecognized FWSS VERSION ${fwssVersion}`)
+  const [major, minor] = [Number(match[1]), Number(match[2])]
+  return major > 1 || (major === 1 && minor >= 6)
+}
+
 export function calculateExpectedStorageRate(
   totalBytes: bigint,
   storagePerTibPerMonth: bigint,
-  datasetFeePerMonth: bigint
+  datasetFeePerMonth: bigint,
+  floorMonthlyTotal: boolean
 ): bigint {
   assert(totalBytes > 0n, 'Data set size must be positive')
   assert(storagePerTibPerMonth >= 0n, 'Storage price cannot be negative')
   assert(datasetFeePerMonth >= 0n, 'Data set fee cannot be negative')
+  if (floorMonthlyTotal) {
+    return ((totalBytes * storagePerTibPerMonth) / TIB_IN_BYTES + datasetFeePerMonth) / EPOCHS_PER_MONTH
+  }
   return (
     (totalBytes * storagePerTibPerMonth) / (TIB_IN_BYTES * EPOCHS_PER_MONTH) +
     datasetFeePerMonth / EPOCHS_PER_MONTH
