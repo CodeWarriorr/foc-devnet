@@ -42,7 +42,7 @@ else
 fi
 
 if command -v node &>/dev/null; then
-  node --test scenarios/synapse-e2e/lifecycle-assertions.test.ts &&
+  node --test scenarios/synapse-e2e/lifecycle-assertions.test.ts scenarios/synapse-e2e/pay-steps.test.ts &&
     pass "scenario assertion tests" || fail "scenario assertion tests"
 else
   skip "scenario assertion tests (node)"
