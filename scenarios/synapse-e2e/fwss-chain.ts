@@ -441,6 +441,28 @@ function filBeamController(environment: ScenarioEnvironment) {
   return createWalletClient({ account, chain: environment.chain, transport: http() })
 }
 
+/** Sends an FWSS FilBeam call as the FilBeam controller and requires it to succeed. */
+export async function sendAsFilBeamController(
+  synapse: ScenarioSynapse,
+  environment: ScenarioEnvironment,
+  functionName: 'settleFilBeamPaymentRails' | 'terminateCDNService',
+  args: readonly bigint[],
+  label: string
+) {
+  const wallet = filBeamController(environment)
+  const { request } = await simulateContract(wallet, {
+    address: environment.chain.contracts.fwss.address,
+    abi: fwssAbi,
+    functionName,
+    args,
+  } as Parameters<typeof simulateContract>[1])
+  const hash = await wallet.writeContract(request as Parameters<typeof wallet.writeContract>[0])
+  const receipt = await waitForReceipt(synapse, hash, label)
+  assertReceiptSucceeded(receipt, label)
+  console.log(`${label}: tx=${hash}`)
+  return receipt
+}
+
 /** Settles both CDN rails as the FilBeam controller and checks every balance and lockup change. */
 export async function settleCdnExactly(
   synapse: ScenarioSynapse,
@@ -450,7 +472,6 @@ export async function settleCdnExactly(
   cacheMissAmount: bigint,
   label: string
 ): Promise<void> {
-  const wallet = filBeamController(environment)
   const railIds = [cdn.cdnRailId, cdn.cacheMissRailId]
   const rails = await Promise.all(railIds.map((railId) => getRail(synapse.client, { railId })))
   const [payerBefore, cdnPayeeBefore, cacheMissPayeeBefore] = await Promise.all([
@@ -458,14 +479,7 @@ export async function settleCdnExactly(
     payeeFunds(synapse, environment, rails[0].token, rails[0].to),
     payeeFunds(synapse, environment, rails[1].token, rails[1].to),
   ])
-  const { request } = await simulateContract(wallet, {
-    address: environment.chain.contracts.fwss.address,
-    abi: fwssAbi,
-    functionName: 'settleFilBeamPaymentRails',
-    args: [cdn.dataSetId, cdnAmount, cacheMissAmount],
-  })
-  const hash = await wallet.writeContract(request)
-  assertReceiptSucceeded(await waitForReceipt(synapse, hash, label), label)
+  await sendAsFilBeamController(synapse, environment, 'settleFilBeamPaymentRails', [cdn.dataSetId, cdnAmount, cacheMissAmount], label)
   const railsAfter = await Promise.all(railIds.map((railId) => getRail(synapse.client, { railId })))
   const [payerAfter, cdnPayeeAfter, cacheMissPayeeAfter] = await Promise.all([
     readAccountState(synapse),
@@ -487,7 +501,7 @@ export async function settleCdnExactly(
     assert.equal(cdnPayeeAfter - cdnPayeeBefore, cdnNet, `${label}: CDN payee credit differs`)
     assert.equal(cacheMissPayeeAfter - cacheMissPayeeBefore, cacheMissNet, `${label}: cache-miss payee credit differs`)
   }
-  console.log(`${label}: dataSet=${cdn.dataSetId} cdn=${cdnAmount} cacheMiss=${cacheMissAmount} tx=${hash}`)
+  console.log(`${label}: dataSet=${cdn.dataSetId} cdn=${cdnAmount} cacheMiss=${cacheMissAmount}`)
 }
 
 /**
