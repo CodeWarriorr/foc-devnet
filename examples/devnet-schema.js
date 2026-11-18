@@ -36,6 +36,7 @@ const ContractsInfo = z.object({
   service_provider_registry_proxy_addr: z.string().startsWith("0x"),
   service_provider_registry_impl_addr: z.string().startsWith("0x"),
   filecoin_pay_v1_addr: z.string().startsWith("0x"),
+  filecoin_pay_v2_addr: z.string().startsWith("0x").optional(),
   endorsements_addr: z.string().startsWith("0x"),
   session_key_registry_addr: z.string().startsWith("0x"),
 });

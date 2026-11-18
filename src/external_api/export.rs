@@ -133,6 +133,7 @@ fn build_contracts(ctx: &SetupContext) -> Result<ContractsInfo, Box<dyn std::err
         filecoin_pay_v1_addr: ctx
             .get("foc_contract_filecoin_pay_v1_contract")
             .ok_or("Missing foc_contract_filecoin_pay_v1_contract in context")?,
+        filecoin_pay_v2_addr: ctx.get("foc_contract_filecoin_pay_v2_contract"),
         endorsements_addr: ctx
             .get("foc_contract_endorsements")
             .ok_or("Missing foc_contract_endorsements in context")?,

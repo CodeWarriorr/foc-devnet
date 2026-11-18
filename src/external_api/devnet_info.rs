@@ -85,6 +85,9 @@ pub struct ContractsInfo {
     pub service_provider_registry_impl_addr: String,
     /// FilecoinPay V1 contract address
     pub filecoin_pay_v1_addr: String,
+    /// FilecoinPay V2 contract address, when the deployed filecoin-services has one
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filecoin_pay_v2_addr: Option<String>,
     /// Endorsements contract address
     pub endorsements_addr: String,
     /// SessionKeyRegistry contract address
