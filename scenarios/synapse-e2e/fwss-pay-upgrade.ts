@@ -52,6 +52,7 @@ import {
   waitForCurrentPeriodEnd,
   waitForNextChallenge,
   waitForPeriodEnd,
+  waitForProviderDataSet,
   waitForReceipt,
 } from './fwss-chain.ts'
 import { assertReceiptSucceeded, findRevertErrorName } from './lifecycle-assertions.ts'
@@ -186,6 +187,7 @@ async function expectRevert(run: () => Promise<unknown>, expected: string, label
 
 async function addPiece(ctx: Context, ref: DataSetRef, tag: number, label: string): Promise<string> {
   const context = await ctx.synapse.storage.createContext({ providerId: ref.providerId, dataSetId: ref.dataSetId })
+  await waitForProviderDataSet(context.provider.pdp.serviceURL, ref.dataSetId)
   const stored = await context.store(variant(ctx.source, tag))
   const committed = await context.commit({
     pieces: [{ pieceCid: stored.pieceCid }],
@@ -488,6 +490,28 @@ async function assertV2CreateRejected(ctx: Context, signer: `0x${string}`, expec
   )
 }
 
+/** A new account with FIL for gas and USDFC in its wallet, and nothing in either Pay contract. */
+async function fundedStranger(ctx: Context, label: string): Promise<{ key: `0x${string}`; synapse: ScenarioSynapse }> {
+  const key = generatePrivateKey()
+  const stranger = privateKeyToAccount(key)
+  const gas = await sendTransaction(ctx.synapse.client, {
+    account: ctx.synapse.client.account,
+    chain: ctx.environment.chain,
+    to: stranger.address,
+    value: parseUnits('1', 18),
+  })
+  assertReceiptSucceeded(await waitForReceipt(ctx.synapse, gas, `${label} FIL`), `${label} FIL`)
+  const usdfc = await simulateContract(ctx.synapse.client, {
+    account: ctx.synapse.client.account,
+    address: ctx.checkpoint.token,
+    abi: parseAbi(['function transfer(address to, uint256 amount) returns (bool)']),
+    functionName: 'transfer',
+    args: [stranger.address, V2_DEPOSIT],
+  })
+  await send(ctx.synapse, usdfc.request, `${label} USDFC`)
+  return { key, synapse: createSynapse({ ...ctx.environment, privateKey: key, user: undefined }) }
+}
+
 /** Gross a constant-rate rail earns over (from, to] in the data set's proven periods. */
 async function provenGross(ctx: Context, dataSetId: bigint, rate: bigint, from: bigint, to: bigint): Promise<bigint> {
   const contracts = contractsOf(ctx.environment)
@@ -653,26 +677,16 @@ async function proceed(ctx: Context, upgradeBlock: bigint | undefined): Promise<
 
   await runner.run('v2.create.rejected-unauthorized', ['v2.address'], async () => {
     // A funded payer that never authorized FWSS.
-    const key = generatePrivateKey()
-    const stranger = privateKeyToAccount(key)
-    const gas = await sendTransaction(synapse.client, {
-      account: synapse.client.account,
-      chain: environment.chain,
-      to: stranger.address,
-      value: parseUnits('1', 18),
-    })
-    assertReceiptSucceeded(await waitForReceipt(synapse, gas, 'Stranger FIL'), 'Stranger FIL')
-    const usdfc = await simulateContract(synapse.client, {
-      account: synapse.client.account,
-      address: checkpoint.token,
-      abi: parseAbi(['function transfer(address to, uint256 amount) returns (bool)']),
-      functionName: 'transfer',
-      args: [stranger.address, V2_DEPOSIT],
-    })
-    await send(synapse, usdfc.request, 'Stranger USDFC')
-    const strangerSynapse = createSynapse({ ...ctx.environment, privateKey: key, user: undefined })
-    await depositV2(strangerSynapse, pay!, checkpoint.token, V2_DEPOSIT)
+    const { key, synapse: stranger } = await fundedStranger(ctx, 'Unauthorized payer')
+    await depositV2(stranger, pay!, checkpoint.token, V2_DEPOSIT)
     await assertV2CreateRejected(ctx, key, 'Unauthorized', 'Creation for a payer that did not authorize FWSS')
+  })
+
+  await runner.run('v2.create.rejected-v1-only', ['v2.address'], async () => {
+    // A payer set up the v1 way (Pay v1 deposit and FWSS approval) gets no v1 rail and no data set.
+    const { key, synapse: stranger } = await fundedStranger(ctx, 'Pay v1 payer')
+    await prepareAccount(stranger, BigInt(ctx.source.byteLength))
+    await assertV2CreateRejected(ctx, key, 'InsufficientLockupFunds', 'Creation for a payer funded on Pay v1 only')
   })
 
   const storage = await runner.run('v2.create.storage', ['v2.account.setup'], () =>
@@ -722,11 +736,14 @@ async function proceed(ctx: Context, upgradeBlock: bigint | undefined): Promise<
     assert.equal(after.available, info.lifecycleReserveBalance, 'V2 PDP lockup differs from the FWSS reserve')
   })
 
-  if (legacy && cdn != null) {
-    await runner.run('legacy.cdn.settle', ['legacy.state'], () =>
-      settleCdnExactly(synapse, environment, cdn, 3_000n, 4_000n, 'FilBeam settlement of a legacy data set')
+  // Steps on a fixture that prepare failed to create show as BLOCKED rather than vanish.
+  if (legacy) {
+    await runner.run('legacy.cdn.settle', ['legacy.state', 'v1.create.cdn'], () =>
+      settleCdnExactly(synapse, environment, cdn!, 3_000n, 4_000n, 'FilBeam settlement of a legacy data set')
     )
-    await runner.run('legacy.cdn.top-up', ['legacy.state'], () => topUpCdnV1(ctx, cdn, 'Legacy CDN top-up'))
+    await runner.run('legacy.cdn.top-up', ['legacy.state', 'v1.create.cdn'], () =>
+      topUpCdnV1(ctx, cdn!, 'Legacy CDN top-up')
+    )
   }
   await runner.run('v2.cdn.settle', ['v2.create.cdn'], async () => {
     const beneficiary = await beneficiaryOf(ctx)
@@ -801,10 +818,11 @@ async function proceed(ctx: Context, upgradeBlock: bigint | undefined): Promise<
     const before = await railStateV2(synapse, pay!, storage!.pdpRailId)
     const period = await waitForProvenPeriodEnd(ctx, storage!.dataSetId)
     const payeeBefore = await balanceV2(synapse, pay!, storage!.payee, checkpoint.token)
-    const { settledUpTo } = await settleV2(synapse, pay!, key)
-    const after = await railStateV2(synapse, pay!, storage!.pdpRailId)
+    const { receipt } = await settleV2(synapse, pay!, key)
+    const { settledUpTo } = await railStateV2(synapse, pay!, storage!.pdpRailId)
     const payeeAfter = await balanceV2(synapse, pay!, storage!.payee, checkpoint.token)
-    assert.equal(after.settledUpTo, settledUpTo, 'V2 rail cursor differs from the settlement result')
+    // A funded rail settles up to the block the settlement lands in, not the simulated one.
+    assert.equal(settledUpTo, receipt.blockNumber, 'V2 settlement of a funded rail did not reach its own block')
     assert(settledUpTo >= period.deadline, 'V2 settlement stopped before the proven period ended')
     // FWSS pays proven epochs only, as on v1. Pay v2 takes no network fee in the code read so far; tighten
     // this once FWSS's IRailV2.settleRail lands and its fee and commission rules are known.
@@ -853,15 +871,19 @@ async function proceed(ctx: Context, upgradeBlock: bigint | undefined): Promise<
         args: [key.operator, key.from, key.recipient, key.nonce, tokenId(key.token)],
       })
     } catch (error) {
-      console.log(`Payer termination of the v2 PDP rail refused: ${findRevertErrorName(error)}`)
+      // Pay v2 calls the operator's IRailV2.settleRail first; a revert without a name (a missing
+      // callback, an RPC error) is not a refusal.
+      const name = findRevertErrorName(error)
+      assert(name != null, `Payer termination of the v2 PDP rail failed without a named revert: ${error}`)
+      console.log(`Payer termination of the v2 PDP rail refused: ${name}`)
       return
     }
     throw new Error('The payer can terminate its FWSS PDP rail on FilecoinPayV2 directly, without FWSS recording the end')
   })
 
-  if (legacy && cdn != null) {
-    await runner.run('legacy.cdn.terminate', ['legacy.state'], () =>
-      terminateCdnService(synapse, environment, cdn, 'CDN termination of a legacy data set')
+  if (legacy) {
+    await runner.run('legacy.cdn.terminate', ['legacy.state', 'v1.create.cdn'], () =>
+      terminateCdnService(synapse, environment, cdn!, 'CDN termination of a legacy data set')
     )
   }
   await runner.run('v2.cdn.terminate', ['v2.create.cdn'], async () => {
@@ -882,8 +904,8 @@ async function proceed(ctx: Context, upgradeBlock: bigint | undefined): Promise<
     assert(pdpRail.settledUpTo > 0n, 'V2 PDP rail ended with the CDN rails')
   })
 
-  if (legacy && checkpoint.terminating != null) {
-    await runner.run('legacy.terminate.payer', ['legacy.state'], async () => {
+  if (legacy) {
+    await runner.run('legacy.terminate.payer', ['legacy.state', 'v1.create.terminating'], async () => {
       await terminateAsPayer(synapse, environment, checkpoint.terminating!.dataSetId)
     })
   }
@@ -931,7 +953,8 @@ async function proceed(ctx: Context, upgradeBlock: bigint | undefined): Promise<
   })
 
   if (legacy) {
-    await runner.run('legacy.no-new-v1-rails', ['legacy.state'], async () => {
+    // Needs a data set created after the upgrade, or there is nothing to check.
+    await runner.run('legacy.no-new-v1-rails', ['legacy.state', 'v2.create.storage'], async () => {
       const head = await getBlockNumber(synapse.client)
       const created = await v1RailsCreatedSince(synapse, checkpoint.payV1, upgradeBlock + 1n, head)
       assert.equal(created.length, 0, `FilecoinPayV1 opened ${created.length} rails after the upgrade`)

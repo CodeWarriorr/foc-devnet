@@ -145,12 +145,12 @@ def run_side(args, side, report, common, output):
         scenario_timeout = 14400
         if args.fwss_pay_only:
             scenario_args.append("--fwss-pay-only")
-            scenario_timeout = 11000
+            scenario_timeout = 17000
         else:
             scenario_args.append("--fwss-regression")
             if args.fwss_pay:
                 scenario_args.append("--fwss-pay")
-                scenario_timeout += 10800
+                scenario_timeout += 16500
         if args.fwss_pay or args.fwss_pay_only:
             env["FWSS_PAY_EVIDENCE_DIR"] = str(directory / "pay-evidence")
             # The baseline devnet is upgraded in place to the candidate; the
@@ -341,16 +341,14 @@ def main():
         parser.error("--keep-running requires --only")
     if args.fwss_pay and args.fwss_pay_only:
         parser.error("--fwss-pay and --fwss-pay-only are exclusive")
+    if args.fwss_pay_only and args.require_dispatch:
+        parser.error("--require-dispatch needs the FWSS regression scenarios, not --fwss-pay-only")
     sides = (args.only,) if args.only else ("baseline", "candidate")
     repo = args.services_repo.resolve()
     report = {
         "scope": "fresh-deployment FWSS lifecycle; not a populated-proxy migration",
         "require_candidate_dispatch": args.require_dispatch,
-        "migration": (
-            "baseline upgraded in place by test_fwss_pay_v2"
-            if args.fwss_pay or args.fwss_pay_only
-            else "NOT_RUN"
-        ),
+        "migration": "NOT_RUN",
         "services_repository": str(repo),
         "baseline": {"ref": args.baseline, "commit": revision(repo, args.baseline)},
         "candidate": {"ref": args.candidate, "commit": revision(repo, args.candidate)},
@@ -419,6 +417,10 @@ def main():
             report[side]["status"] = "NOT_RUN"
         for side in sides:
             run_side(args, side, report, common, output)
+            upgrade_log = output / side / "pay-evidence" / "upgrade.log"
+            if side == "baseline" and upgrade_log.is_file():
+                if "PAY_V2_UPGRADE_OK" in upgrade_log.read_text():
+                    report["migration"] = "baseline upgraded in place by test_fwss_pay_v2"
             if report[side].get("cleanup_error"):
                 break
         report["status"] = (

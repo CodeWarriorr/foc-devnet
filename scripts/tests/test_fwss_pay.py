@@ -112,7 +112,21 @@ class PayFlagTests(unittest.TestCase):
                 capture_output=True,
             )
             report = json.loads((Path(tmp) / "pay/comparison.json").read_text())
-            self.assertIn("test_fwss_pay_v2", report["migration"])
+            # Only an upgrade that ran is recorded.
+            self.assertEqual(report["migration"], "NOT_RUN")
+            dispatch = subprocess.run(
+                [
+                    *base,
+                    "--output",
+                    str(Path(tmp) / "y"),
+                    "--fwss-pay-only",
+                    "--require-dispatch",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(dispatch.returncode, 0)
+            self.assertIn("--require-dispatch", dispatch.stderr)
             subprocess.run(
                 [*base, "--output", str(Path(tmp) / "plain")],
                 check=True,

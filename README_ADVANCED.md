@@ -1425,7 +1425,7 @@ revision.
 This is a **fresh-deployment** comparison. It does not prove migration of a
 populated legacy proxy, signature continuity/replay across an upgrade, or every
 pricing and fault boundary; `comparison.json` explicitly records
-`migration: NOT_RUN`, unless `--fwss-pay` or `--fwss-pay-only` upgrades the
+`migration: NOT_RUN`, unless `--fwss-pay` or `--fwss-pay-only` upgraded the
 baseline in place (see below).
 
 ### FWSS v1.4.0 transition rehearsal (temporary)
@@ -1470,11 +1470,12 @@ and this section once Calibnet and Mainnet run the dispatcher.
 
 ### FWSS on Filecoin Pay v1 and v2
 
-`scenarios/test_fwss_pay_v2.py` checks every FWSS path that moves money through
+`scenarios/test_fwss_pay_v2.py` checks the FWSS paths that move money through
 Filecoin Pay, on a release that uses Pay v1 only and on a candidate that adds
 FilecoinPayV2. Data sets that exist before the upgrade keep their Pay v1 rails;
-new data sets get Pay v2 rails. The scenario pays from `USER_3`, so it does not
-change the balances that the other scenarios check exactly.
+new data sets get Pay v2 rails. The scenario pays from `USER_3` and checks
+changes per rail and per step, so earlier scenarios on that account do not
+affect it.
 
 It chooses a mode from the devnet and the environment:
 
@@ -1497,7 +1498,9 @@ python3 scripts/run-fwss-regression.py \
 ```
 
 `--fwss-pay-only` runs only this scenario after the container and balance
-checks; `--fwss-pay` runs it after the full FWSS regression suite. On the
+checks; `--fwss-pay` runs it after the full FWSS regression suite. That suite
+funds Pay v1 only, so use `--fwss-pay-only` for a candidate that creates data
+sets on Pay v2. On the
 baseline side the scenario upgrades the devnet to the candidate in place; on the
 candidate side it runs in `v2` mode. Results, logs and ledgers are in
 `<revision>/pay-evidence/`. On a running devnet, run the scenario directly with
@@ -1523,7 +1526,8 @@ The `upgrade` mode runs in three phases:
    top-ups, FilBeam settlement, CDN and payer termination, and withdrawal, and
    Pay v1 opens no new rails. New data sets open only Pay v2 rails with the ids
    FWSS derives, and go through the same steps on Pay v2. Creation for a payer
-   without v2 funds or without a v2 authorization of FWSS is refused.
+   without v2 funds, without a v2 authorization of FWSS, or funded and
+   approved on Pay v1 only is refused.
 
 Each behavior is a named step with a result: `PASS`, `FAIL`, `BLOCKED` (a step
 it needs did not pass), `PENDING` or `FIXED`. While the Pay v2 integration is in
@@ -1537,9 +1541,16 @@ where only data set creation uses Pay v2:
 export FWSS_PAY_PENDING='v2.add-pieces,v2.reserve.top-up,v2.cdn.settle,v2.cdn.top-up,v2.cdn.terminate,v2.terminate.payer,v2.pdp-rail.payer-cannot-bypass-fwss'
 ```
 
-The scenario does not cover paths that need more time than a devnet run has:
-data set deletion after the 30-day lockup of a terminated v1 rail, and
-abandonment after 30 days without proofs.
+The scenario does not cover:
+
+- paths that need more time than a devnet run has: data set deletion after the
+  30-day lockup of a terminated v1 rail, and abandonment after 30 days without
+  proofs;
+- service termination by the storage provider, and periods the provider fails
+  to prove;
+- on Pay v2, data set deletion and the payout at termination:
+  `v2.terminate.payer` checks only the end epoch FWSS records, until the
+  integration defines how a v2 rail ends.
 
 ### Running scenarios
 

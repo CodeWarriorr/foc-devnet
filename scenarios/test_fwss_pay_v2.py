@@ -34,6 +34,7 @@ from scenarios.test_fwss_transition import _candidate_checkout
 RAND_FILE_NAME = "fwss_pay_file"
 RAND_FILE_SIZE = 1024 * 1024
 RAND_FILE_SEED = 8170
+# Per phase; run.py's FWSS_PAY_SCENARIO bounds the whole scenario.
 PHASE_TIMEOUT_SECS = 5400
 UPGRADE_SCRIPT = Path(__file__).resolve().parent / "fwss-pay-upgrade.sh"
 # USER_3: the standard scenarios use USER_1 and USER_2, and exact balance checks need an untouched payer.
@@ -68,14 +69,18 @@ def _run_phase(runtime, phase, checkpoint, random_file, env, log: Path) -> int:
         str(random_file),
     ]
     with log.open("w") as stream:
-        result = subprocess.run(
-            cmd,
-            cwd=str(runtime.work_dir),
-            env={**os.environ, **env},
-            stdout=stream,
-            stderr=subprocess.STDOUT,
-            timeout=PHASE_TIMEOUT_SECS,
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=str(runtime.work_dir),
+                env={**os.environ, **env},
+                stdout=stream,
+                stderr=subprocess.STDOUT,
+                timeout=PHASE_TIMEOUT_SECS,
+            )
+        except subprocess.TimeoutExpired:
+            info(f"Phase {phase} timed out after {PHASE_TIMEOUT_SECS}s; log: {log}")
+            return 1
     info(f"Phase {phase} exited {result.returncode}; log: {log}")
     return result.returncode
 
@@ -160,10 +165,11 @@ def run():
     mode = choose_mode(devnet, os.environ)
     info(f"Mode: {mode}")
 
+    # Absolute: the phases run Node from the runtime directory.
     evidence = Path(
         os.environ.get("FWSS_PAY_EVIDENCE_DIR")
         or tempfile.mkdtemp(prefix="fwss-pay-evidence-")
-    )
+    ).resolve()
     evidence.mkdir(parents=True, exist_ok=True)
     results_path = evidence / "pay-steps.json"
     results_path.unlink(missing_ok=True)
