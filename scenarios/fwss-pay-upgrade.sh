@@ -40,6 +40,8 @@ printf 'devnet' > "$WORK/password"
 PASSWORD_FILE="$WORK/password"
 OWNER="$(cast wallet address --private-key "$OWNER_PRIVATE_KEY")"
 export CHAIN ETH_RPC_URL
+# Both checkouts read josuke.json in their own directory.
+unset JOSUKE_LEDGER
 
 # DEVNET: the checklist installs josuke and evm into the operator's PATH. Each
 # checkout gets the revisions its own Makefile pins, into this run only.
@@ -117,7 +119,7 @@ jq --indent 4 \
     }}
   }]' josuke.json > "$WORK/josuke.json"
 mv "$WORK/josuke.json" josuke.json
-make erc8167 >/dev/null
+PATH="$WORK/baseline-bin:$PATH" make erc8167 >/dev/null
 (
   export PATH="$WORK/baseline-bin:$PATH"
   josuke_deploy "baseline-record"
@@ -211,7 +213,9 @@ read_plan
 [ "$PLANNED_TARGET" = "$(cast to-check-sum-address "$MIGRATION")" ] || fail "STOP: the pending plan is not the reviewed migration"
 josuke verify || fail "STOP: josuke verify failed"
 CALLDATA=$(cast calldata 'migrate(address)' "$MIGRATION")
-cast call --rpc-url "$ETH_RPC_URL" --from "$OWNER" "$FWSS_PROXY_ADDRESS" "$CALLDATA" > /dev/null && echo "Simulation succeeded"
+cast call --rpc-url "$ETH_RPC_URL" --from "$OWNER" "$FWSS_PROXY_ADDRESS" "$CALLDATA" > /dev/null \
+  || fail "migrate simulation reverted"
+echo "Simulation succeeded"
 # DEVNET: no Safe; the owner sends the same calldata.
 owner_send "$FWSS_PROXY_ADDRESS" "$CALLDATA" > "$EVIDENCE_DIR/B4-migrate.json"
 [ "$(jq -r .status "$EVIDENCE_DIR/B4-migrate.json")" = "0x1" ] || fail "migrate reverted"

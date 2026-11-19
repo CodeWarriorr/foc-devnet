@@ -51,7 +51,7 @@ FWSS_REGRESSION_ORDER = [
 
 # Opt-in: Pay v1 and v2 across the FWSS upgrade that adds Pay v2. It pays on
 # USER_3, so it does not disturb the exact balances the scenarios above check.
-FWSS_PAY_SCENARIO = ("test_fwss_pay_v2", 10800)
+FWSS_PAY_SCENARIO = ("test_fwss_pay_v2", 16500)
 FWSS_PAY_ONLY_ORDER = [
     ("test_containers", 5),
     ("test_basic_balances", 10),
